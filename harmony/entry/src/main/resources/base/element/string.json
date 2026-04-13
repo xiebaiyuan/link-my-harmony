@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "Linking-Harmony"
+    },
+    {
+      "name": "module_desc",
+      "value": "Linkwarden HarmonyOS app"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Entry ability"
+    }
+  ]
+}
