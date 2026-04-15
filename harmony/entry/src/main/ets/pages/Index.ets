@@ -1,5 +1,4 @@
 import type common from '@ohos.app.ability.common';
-import { hdsEffect } from '@kit.UIDesignKit';
 import { emptyLinkItem, type LinkItem, type CollectionItem, type LinkTag } from '../common/Models';
 import { LinkwardenApi } from '../services/LinkwardenApi';
 import { normalizeInstanceUrl } from '../common/Query';
@@ -8,10 +7,10 @@ import {
   normalizeThemeMode,
   type ThemeMode,
 } from '../common/SessionState';
+import { createQuickMenuActions, createThemeOptions, createThemePalette, shouldReturnToDashboard, type MainView, type QuickMenuAction, type ThemeOption } from '../common/UiDesign';
 import { SessionStorage } from '../services/SessionStorage';
 import { consumePendingSharedIntent } from '../common/ShareIntent';
 
-type MainView = 'dashboard' | 'elements' | 'search' | 'settings';
 type ElementsView = 'links' | 'collections' | 'tags';
 type ActiveModal = 'none' | 'add' | 'edit' | 'collection' | 'collection-picker';
 type CollectionFormSource = 'add' | 'edit';
@@ -96,8 +95,9 @@ struct Index {
   @State newCollectionParentQuery: string = '';
   @State collectionSaving: boolean = false;
   @State pinSaving: boolean = false;
-  @State activeFloatingSymbol: string = '';
-  @State pressedFloatingSymbol: string = '';
+  @State quickMenuOpen: boolean = false;
+  @StorageLink('safeAreaTop') safeAreaTop: number = 44;
+  @StorageLink('deviceDarkMode') deviceDarkMode: boolean = false;
 
   private api: LinkwardenApi = new LinkwardenApi('https://link.xiebaiyuan.com:45456', '');
   private storage: SessionStorage | null = null;
@@ -166,6 +166,7 @@ struct Index {
           }
           .layoutWeight(1)
           .width('100%')
+          .padding({ top: this.safeAreaTop })
           .scrollBar(BarState.Off);
         } else {
           this.MainPanel();
@@ -177,11 +178,23 @@ struct Index {
 
       if (!this.restoring && this.token.length > 0) {
         Column() {
-          this.FloatingActions();
+          Column({ space: 6 }) {
+            if (this.mainView === 'dashboard') {
+              if (this.quickMenuOpen) {
+                this.QuickMenuDropdown();
+              }
+              this.QuickMenuButton();
+            } else {
+              this.HomeButton();
+            }
+          }
+          .alignItems(HorizontalAlign.End);
         }
-        .width(this.floatingActionsWidth())
-        .margin({ right: 14, bottom: 18 })
-        .align(Alignment.BottomEnd);
+        .width('100%')
+        .alignItems(HorizontalAlign.End)
+        .padding({ bottom: 100, right: 20 })
+        .hitTestBehavior(HitTestMode.Transparent)
+        .zIndex(100);
       }
 
       if (this.notice.length > 0) {
@@ -216,16 +229,24 @@ struct Index {
   @Builder
   private LoginPanel() {
     Column({ space: 10 }) {
+      this.SectionSubtitle('Sign in to manage links, collections, and quick capture.');
+
       TextInput({ placeholder: 'Server URL', text: this.instance })
         .onChange((value: string) => {
           this.instance = value;
         })
+        .backgroundColor(this.inputBackgroundColor())
+        .fontColor(this.primaryTextColor())
+        .borderRadius(12)
         .width('100%');
 
       TextInput({ placeholder: 'Username', text: this.username })
         .onChange((value: string) => {
           this.username = value;
         })
+        .backgroundColor(this.inputBackgroundColor())
+        .fontColor(this.primaryTextColor())
+        .borderRadius(12)
         .width('100%');
 
       TextInput({ placeholder: 'Password', text: this.password })
@@ -233,6 +254,9 @@ struct Index {
         .onChange((value: string) => {
           this.password = value;
         })
+        .backgroundColor(this.inputBackgroundColor())
+        .fontColor(this.primaryTextColor())
+        .borderRadius(12)
         .width('100%');
 
       this.ThemePicker();
@@ -252,90 +276,168 @@ struct Index {
 
   @Builder
   private MainPanel() {
-    if (this.mainView === 'dashboard') {
-      Column() {
-        Refresh({ refreshing: this.dashboardRefreshing }) {
-          Scroll() {
-            Column({ space: 10 }) {
-              this.DashboardPanel();
+    Column({ space: 0 }) {
+      Row() {
+        Column({ space: 2 }) {
+          Text(this.mainViewTitle())
+            .fontSize(this.mainView === 'dashboard' ? 24 : 20)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.primaryTextColor())
+            .width('100%')
+            .textAlign(TextAlign.Start);
+
+          Text(this.mainViewSubtitle())
+            .fontSize(12)
+            .fontColor(this.secondaryTextColor())
+            .width('100%')
+            .textAlign(TextAlign.Start)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+        .padding({ right: this.mainView === 'dashboard' ? 60 : 90 });
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16, bottom: 12 });
+
+      if (this.mainView === 'dashboard') {
+        Column() {
+          Refresh({ refreshing: this.dashboardRefreshing }) {
+            Scroll() {
+              Column({ space: 10 }) {
+                this.DashboardPanel();
+              }
+              .padding({ left: 12, right: 12, top: 12, bottom: 24 })
+              .width('100%');
             }
-            .padding({ left: 12, right: 12, top: 12, bottom: 108 })
-            .width('100%');
+            .width('100%')
+            .height('100%')
+            .scrollBar(BarState.Off);
           }
+          .layoutWeight(1)
           .width('100%')
-          .height('100%')
-          .scrollBar(BarState.Off);
+          .onStateChange((state: RefreshStatus) => {
+            if (state === RefreshStatus.Refresh) {
+              this.handleDashboardPullRefresh();
+            }
+          });
         }
         .layoutWeight(1)
         .width('100%')
-        .onStateChange((state: RefreshStatus) => {
-          if (state === RefreshStatus.Refresh) {
-            this.handleDashboardPullRefresh();
+        .backgroundColor(this.surfaceColor())
+        .borderRadius(18);
+      } else {
+        Column() {
+          if (this.mainView === 'elements') {
+            this.ElementsPanel();
+          } else if (this.mainView === 'search') {
+            this.SearchPanel();
+          } else {
+            this.SettingsPanel();
           }
-        });
-      }
-      .width('100%')
-      .height('100%')
-      .backgroundColor(this.surfaceColor())
-      .borderRadius(12);
-    } else {
-      Column() {
-        if (this.mainView === 'elements') {
-          this.ElementsPanel();
-        } else if (this.mainView === 'search') {
-          this.SearchPanel();
-        } else {
-          this.SettingsPanel();
         }
+        .layoutWeight(1)
+        .padding(12)
+        .width('100%')
+        .justifyContent(FlexAlign.Start)
+        .alignItems(HorizontalAlign.Start)
+        .backgroundColor(this.surfaceColor())
+        .borderRadius(18);
       }
-      .padding(12)
-      .width('100%')
-      .height('100%')
-      .justifyContent(FlexAlign.Start)
-      .alignItems(HorizontalAlign.Start)
-      .backgroundColor(this.surfaceColor())
-      .borderRadius(12);
     }
+    .padding({ left: 12, right: 12, top: this.safeAreaTop + 12, bottom: 12 })
+    .width('100%')
+    .height('100%');
+  }
+
+
+  @Builder
+  private QuickMenuButton() {
+    Button() {
+      SymbolGlyph($r('sys.symbol.ellipsis_circle'))
+        .fontSize(24)
+        .fontColor([this.accentColor()]);
+    }
+    .type(ButtonType.Normal)
+    .width(48)
+    .height(48)
+    .padding(0)
+    .backgroundColor(this.fabBackgroundColor())
+    .border({ width: 1, color: this.fabBorderColor() })
+    .borderRadius(999)
+    .shadow({ radius: 12, color: this.floatingDockShadowColor(), offsetX: 0, offsetY: 4 })
+    .onClick(() => {
+      this.quickMenuOpen = !this.quickMenuOpen;
+    });
   }
 
   @Builder
-  private FloatingActions() {
-    Row({ space: 10 }) {
-      if (this.mainView !== 'dashboard') {
-        this.FloatingActionButton('⌂', () => {
-          this.mainView = 'dashboard';
-          this.refreshDashboard();
-        });
-      }
-
-      this.FloatingActionButton('＋', () => {
-        this.openAddModal();
-      });
-
-      this.FloatingActionButton('⌕', () => {
-        this.mainView = 'search';
-        this.refreshLinks(true);
-        this.refreshDashboard();
-      });
-
-      this.FloatingActionButton('⋯', () => {
-        this.mainView = 'settings';
-        this.settingsInstance = this.instance;
-      });
+  private HomeButton() {
+    Button() {
+      SymbolGlyph($r('sys.symbol.house_fill'))
+        .fontSize(22)
+        .fontColor([this.accentColor()]);
     }
-    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-    .backgroundColor(this.floatingDockColor())
-    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
-    .visualEffect(new hdsEffect.HdsEffectBuilder()
-      .pointLight({
-        illuminatedType: hdsEffect.PointLightIlluminatedType.DEFAULT_FEATHERING_BORDER,
-      })
-      .buildEffect())
-    .border({ width: 1, color: this.floatingDockBorderColor() })
+    .type(ButtonType.Normal)
+    .width(48)
+    .height(48)
+    .padding(0)
+    .backgroundColor(this.fabBackgroundColor())
+    .border({ width: 1, color: this.fabBorderColor() })
     .borderRadius(999)
-    .shadow({ radius: 22, color: this.floatingDockShadowColor(), offsetX: 0, offsetY: 10 })
-    .justifyContent(FlexAlign.End)
-    .alignItems(VerticalAlign.Center);
+    .shadow({ radius: 12, color: this.floatingDockShadowColor(), offsetX: 0, offsetY: 4 })
+    .onClick(() => {
+      this.quickMenuOpen = false;
+      this.mainView = 'dashboard';
+    });
+  }
+
+  @Builder
+  private QuickMenuDropdown() {
+    Column({ space: 6 }) {
+      ForEach(createQuickMenuActions(), (action: QuickMenuAction) => {
+        this.QuickMenuItem(action);
+      }, (action: QuickMenuAction) => action.id);
+    }
+    .width(168)
+    .padding(8)
+    .backgroundColor(this.cardColor())
+    .border({ width: 1, color: this.panelBorderColor() })
+    .borderRadius(18)
+    .shadow({ radius: 18, color: this.floatingDockShadowColor(), offsetX: 0, offsetY: 10 });
+  }
+
+  @Builder
+  private QuickMenuItem(action: QuickMenuAction) {
+    Button() {
+      Row({ space: 12 }) {
+        SymbolGlyph($r('sys.symbol.' + action.symbolKey))
+          .fontSize(18)
+          .fontColor([this.accentColor()])
+          .width(22)
+          .height(22);
+
+        Text(action.label)
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.primaryTextColor())
+          .layoutWeight(1)
+          .textAlign(TextAlign.Start)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center);
+    }
+    .width('100%')
+    .height(44)
+    .padding({ left: 14, right: 14 })
+    .backgroundColor(Color.Transparent)
+    .borderRadius(12)
+    .onClick(() => {
+      this.handleQuickMenuAction(action.id);
+    });
   }
 
   @Builder
@@ -357,84 +459,55 @@ struct Index {
   }
 
   @Builder
-  private FloatingActionButton(symbol: string, onClick: () => void) {
-    Button(this.floatingButtonLabel(symbol))
-    .fontSize(13)
-    .fontWeight(FontWeight.Medium)
-    .fontColor(this.floatingButtonTextColor(symbol))
-    .width(58)
-    .height(46)
-    .backgroundColor(this.floatingButtonShellColor(symbol))
-    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-    .visualEffect(new hdsEffect.HdsEffectBuilder()
-      .pressShadow(this.floatingPressShadow(symbol))
-      .pointLight({
-        sourceType: this.floatingPointLightSource(symbol),
-        illuminatedType: hdsEffect.PointLightIlluminatedType.DEFAULT_FEATHERING_BORDER,
-        options: {
-          color: this.isPrimaryFloatingAction(symbol) ? '#F5FDFF' : '#E6F7FF',
-          intensity: this.isPrimaryFloatingAction(symbol) ? 0.85 : 0.42,
-          height: this.isPrimaryFloatingAction(symbol) ? 148 : 108,
-          bloom: this.isPrimaryFloatingAction(symbol) ? 0.45 : 0.2,
-        }
-      })
-      .buildEffect())
-    .border({ width: 1, color: this.floatingButtonBorder(symbol) })
-    .borderRadius(18)
-    .shadow({ radius: this.isPrimaryFloatingAction(symbol) ? 18 : 10, color: this.floatingButtonShadow(symbol), offsetX: 0, offsetY: 6 })
-    .padding(0)
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.activeFloatingSymbol = symbol;
-        this.pressedFloatingSymbol = symbol;
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        if (this.activeFloatingSymbol === symbol) {
-          this.activeFloatingSymbol = '';
-        }
-        if (this.pressedFloatingSymbol === symbol) {
-          this.pressedFloatingSymbol = '';
-        }
-      }
-    })
-    .onClick(() => {
-      onClick();
-    });
-  }
-
-  @Builder
   private ElementsPanel() {
-    Column({ space: 10 }) {
-      Row({ space: 8 }) {
-        Button('Links')
+    Column({ space: 12 }) {
+      // Segmented control
+      Row() {
+        Text('Links')
           .layoutWeight(1)
-          .backgroundColor(this.elementsView === 'links' ? this.tabActiveColor() : this.cardColor())
-          .fontColor(this.elementsView === 'links' ? this.tabActiveTextColor() : this.primaryTextColor())
-          .borderRadius(10)
+          .height(32)
+          .fontSize(13)
+          .fontWeight(this.elementsView === 'links' ? FontWeight.Bold : FontWeight.Regular)
+          .fontColor(this.elementsView === 'links' ? this.tabActiveTextColor() : this.secondaryTextColor())
+          .textAlign(TextAlign.Center)
+          .backgroundColor(this.elementsView === 'links' ? this.tabActiveColor() : Color.Transparent)
+          .borderRadius(8)
           .onClick(() => {
             this.elementsView = 'links';
             this.refreshLinks(true);
           });
 
-        Button('Collections')
+        Text('Collections')
           .layoutWeight(1)
-          .backgroundColor(this.elementsView === 'collections' ? this.tabActiveColor() : this.cardColor())
-          .fontColor(this.elementsView === 'collections' ? this.tabActiveTextColor() : this.primaryTextColor())
-          .borderRadius(10)
+          .height(32)
+          .fontSize(13)
+          .fontWeight(this.elementsView === 'collections' ? FontWeight.Bold : FontWeight.Regular)
+          .fontColor(this.elementsView === 'collections' ? this.tabActiveTextColor() : this.secondaryTextColor())
+          .textAlign(TextAlign.Center)
+          .backgroundColor(this.elementsView === 'collections' ? this.tabActiveColor() : Color.Transparent)
+          .borderRadius(8)
           .onClick(() => {
             this.elementsView = 'collections';
             this.refreshDashboard();
           });
 
-        Button('Tags')
+        Text('Tags')
           .layoutWeight(1)
-          .backgroundColor(this.elementsView === 'tags' ? this.tabActiveColor() : this.cardColor())
-          .fontColor(this.elementsView === 'tags' ? this.tabActiveTextColor() : this.primaryTextColor())
-          .borderRadius(10)
+          .height(32)
+          .fontSize(13)
+          .fontWeight(this.elementsView === 'tags' ? FontWeight.Bold : FontWeight.Regular)
+          .fontColor(this.elementsView === 'tags' ? this.tabActiveTextColor() : this.secondaryTextColor())
+          .textAlign(TextAlign.Center)
+          .backgroundColor(this.elementsView === 'tags' ? this.tabActiveColor() : Color.Transparent)
+          .borderRadius(8)
           .onClick(() => {
             this.elementsView = 'tags';
           });
       }
-      .width('100%');
+      .width('100%')
+      .padding(4)
+      .backgroundColor(this.inputBackgroundColor())
+      .borderRadius(12);
 
       if (this.elementsView === 'links') {
         Column() {
@@ -465,6 +538,7 @@ struct Index {
   @Builder
   private LinksPanel() {
     Column({ space: 10 }) {
+      // Header row: count + add button
       Row({ space: 8 }) {
         Text(`${this.links.length} links`)
           .fontSize(12)
@@ -480,40 +554,43 @@ struct Index {
       .justifyContent(FlexAlign.SpaceBetween)
       .alignItems(VerticalAlign.Center);
 
+      // Filter chip + search
       Row({ space: 8 }) {
-        Button(this.showPinnedOnly ? 'Pinned' : 'All')
-          .backgroundColor(this.showPinnedOnly ? this.tabActiveColor() : this.cardColor())
-          .fontColor(this.showPinnedOnly ? this.tabActiveTextColor() : this.primaryTextColor())
-          .borderRadius(10)
+        Text(this.showPinnedOnly ? '📌 Pinned' : '≡ All')
+          .fontSize(12)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.showPinnedOnly ? this.tabActiveTextColor() : this.secondaryTextColor())
+          .padding({ left: 12, right: 12 })
+          .height(36)
+          .backgroundColor(this.showPinnedOnly ? this.tabActiveColor() : this.inputBackgroundColor())
+          .borderRadius(999)
           .onClick(() => {
             this.selectedCollectionFilterId = 0;
             this.showPinnedOnly = !this.showPinnedOnly;
             this.refreshLinks(true);
           });
-      }
-      .width('100%');
 
-      Row({ space: 8 }) {
-        TextInput({ placeholder: 'Search links', text: this.searchQuery })
+        TextInput({ placeholder: '🔍  Search links', text: this.searchQuery })
           .onChange((value: string) => {
             this.searchQuery = value;
-          })
-          .layoutWeight(1);
-
-        Button('Search')
-          .onClick(() => {
             this.refreshLinks(true);
-          });
+          })
+          .backgroundColor(this.inputBackgroundColor())
+          .fontColor(this.primaryTextColor())
+          .borderRadius(12)
+          .height(36)
+          .layoutWeight(1);
       }
-      .width('100%');
+      .width('100%')
+      .alignItems(VerticalAlign.Center);
 
       if (this.links.length === 0) {
-        Text(this.loading ? 'Loading links...' : 'No links yet.')
+        Text(this.loading ? 'Loading links…' : 'No links yet.')
           .fontSize(13)
           .fontColor(this.secondaryTextColor())
           .width('100%')
-          .textAlign(TextAlign.Start)
-          .padding({ top: 8, bottom: 8 });
+          .textAlign(TextAlign.Center)
+          .padding({ top: 24, bottom: 8 });
       }
 
       List({ space: 8 }) {
@@ -528,9 +605,13 @@ struct Index {
       .width('100%');
 
       if (this.hasMore) {
-        Button(this.loadingMore ? 'Loading more...' : 'Load More')
+        Text(this.loadingMore ? 'Loading more…' : 'Load more')
           .enabled(!this.loadingMore)
+          .fontSize(13)
+          .fontColor(this.accentColor())
           .width('100%')
+          .textAlign(TextAlign.Center)
+          .padding({ top: 8, bottom: 8 })
           .onClick(() => {
             this.refreshLinks(false);
           });
@@ -550,6 +631,9 @@ struct Index {
           .onChange((value: string) => {
             this.collectionSearchQuery = value;
           })
+          .backgroundColor(this.inputBackgroundColor())
+          .fontColor(this.primaryTextColor())
+          .borderRadius(12)
           .width('100%');
 
         if (this.filteredCollections().length === 0) {
@@ -585,6 +669,9 @@ struct Index {
           .onChange((value: string) => {
             this.tagSearchQuery = value;
           })
+          .backgroundColor(this.inputBackgroundColor())
+          .fontColor(this.primaryTextColor())
+          .borderRadius(12)
           .width('100%');
 
         if (this.filteredTags().length === 0) {
@@ -624,9 +711,17 @@ struct Index {
               this.searchShowAllCollections = false;
               this.searchShowAllTags = false;
             })
+            .backgroundColor(this.inputBackgroundColor())
+            .fontColor(this.primaryTextColor())
+            .borderRadius(12)
             .layoutWeight(1);
 
           Button('Search')
+            .height(44)
+            .backgroundColor(this.secondaryActionBackgroundColor())
+            .fontColor(this.secondaryActionTextColor())
+            .borderRadius(12)
+            .border({ width: 1, color: this.accentColor() })
             .onClick(() => {
               this.refreshLinks(true);
               this.refreshDashboard();
@@ -720,24 +815,31 @@ struct Index {
 
   @Builder
   private TagListRow(tag: string) {
-    Row({ space: 8 }) {
-      Text(`#${tag}`)
+    Row({ space: 0 }) {
+      Text('#')
+        .fontSize(15)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.accentColor())
+        .padding({ left: 14, right: 4 });
+
+      Text(tag)
         .fontSize(14)
         .fontWeight(FontWeight.Medium)
         .fontColor(this.primaryTextColor())
         .layoutWeight(1)
-        .textAlign(TextAlign.Start);
+        .textAlign(TextAlign.Start)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis });
 
       Text(`${this.tagUsageCount(tag)}`)
         .fontSize(12)
-        .fontColor(this.secondaryTextColor());
+        .fontColor(this.secondaryTextColor())
+        .padding({ left: 8, right: 14, top: 12, bottom: 12 });
     }
     .width('100%')
-    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-    .backgroundColor(this.cardColor())
-    .borderRadius(10)
-    .justifyContent(FlexAlign.SpaceBetween)
     .alignItems(VerticalAlign.Center)
+    .backgroundColor(this.cardColor())
+    .borderRadius(12)
     .onClick(() => {
       this.navigateToTag(tag);
     });
@@ -759,6 +861,7 @@ struct Index {
             this.handleNewLinkUrlChange(value);
           })
           .backgroundColor(this.surfaceColor())
+          .fontColor(this.primaryTextColor())
           .borderRadius(10)
           .width('100%');
 
@@ -775,6 +878,7 @@ struct Index {
             this.handleNewLinkTitleChange(value);
           })
           .backgroundColor(this.surfaceColor())
+          .fontColor(this.primaryTextColor())
           .borderRadius(10)
           .width('100%');
       }
@@ -808,12 +912,14 @@ struct Index {
 
       Button(this.loading ? 'Adding...' : 'Add Link')
         .width('100%')
-        .height(50)
+        .height(52)
         .fontSize(16)
         .fontWeight(FontWeight.Medium)
-        .backgroundColor(this.tabActiveColor())
-        .fontColor(this.tabActiveTextColor())
-        .borderRadius(14)
+        .backgroundColor(this.primaryActionBackgroundColor())
+        .fontColor(this.primaryActionTextColor())
+        .borderRadius(16)
+        .border({ width: 1, color: this.accentColor() })
+        .shadow({ radius: 14, color: this.primaryActionShadowColor(), offsetX: 0, offsetY: 8 })
         .enabled(!this.loading)
         .onClick(() => {
           this.handleAddLink();
@@ -896,6 +1002,7 @@ struct Index {
           })
           .layoutWeight(1)
           .backgroundColor(this.surfaceColor())
+          .fontColor(this.primaryTextColor())
           .borderRadius(10);
 
         if (this.normalizedTagCandidate(this.newTagPickerQuery).length > 0) {
@@ -1219,73 +1326,87 @@ struct Index {
 
   @Builder
   private LinkCard(item: LinkItem) {
-    Column({ space: 6 }) {
+    Column({ space: 0 }) {
+      // Title row
       Row({ space: 8 }) {
         Text(item.name.length > 0 ? item.name : item.url)
-          .fontSize(16)
-          .fontWeight(FontWeight.Medium)
+          .fontSize(15)
+          .fontWeight(FontWeight.Bold)
           .fontColor(this.primaryTextColor())
-          .maxLines(1)
+          .maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1)
           .textAlign(TextAlign.Start);
 
         if (item.pinned) {
-          Text('Pinned')
-            .fontSize(11)
-            .fontColor(this.accentColor());
+          Text('📌')
+            .fontSize(13);
         }
       }
-      .width('100%');
+      .width('100%')
+      .padding({ bottom: 4 });
 
+      // URL
       Text(item.url)
-        .fontSize(12)
+        .fontSize(11)
         .fontColor(this.secondaryTextColor())
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width('100%')
-        .textAlign(TextAlign.Start);
+        .textAlign(TextAlign.Start)
+        .opacity(0.8);
 
-      Row({ space: 8 }) {
-        Text(item.collectionName.length > 0 ? item.collectionName : 'Unorganized')
-          .fontSize(12)
-          .fontColor(item.collectionColor.length > 0 ? item.collectionColor : this.accentColor());
-
-        if (item.createdAt.length > 0) {
-          Text(this.formatDateLabel(item.createdAt))
-            .fontSize(12)
-            .fontColor(this.secondaryTextColor());
-        }
-      }
-      .width('100%');
-
-      if (item.tags.length > 0) {
-        Text(item.tags.map((tag) => `#${tag.name}`).join(' '))
-          .fontSize(11)
-          .fontColor(this.secondaryTextColor())
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-          .textAlign(TextAlign.Start);
-      }
-
+      // Description (if any)
       if (item.description.length > 0) {
         Text(item.description)
           .fontSize(12)
-          .fontColor(this.primaryTextColor())
+          .fontColor(this.secondaryTextColor())
           .maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
-          .textAlign(TextAlign.Start);
+          .textAlign(TextAlign.Start)
+          .padding({ top: 4 });
       }
+
+      // Meta row: collection chip + date
+      Row({ space: 6 }) {
+        Text(item.collectionName.length > 0 ? item.collectionName : 'Unorganized')
+          .fontSize(11)
+          .fontColor(item.collectionColor.length > 0 ? item.collectionColor : this.accentColor())
+          .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+          .backgroundColor(this.inputBackgroundColor())
+          .borderRadius(999)
+          .maxLines(1);
+
+        if (item.tags.length > 0) {
+          Text(item.tags.map((tag) => `#${tag.name}`).join(' '))
+            .fontSize(11)
+            .fontColor(this.secondaryTextColor())
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1);
+        } else {
+          Blank().layoutWeight(1);
+        }
+
+        if (item.createdAt.length > 0) {
+          Text(this.formatDateLabel(item.createdAt))
+            .fontSize(11)
+            .fontColor(this.secondaryTextColor())
+            .opacity(0.7);
+        }
+      }
+      .width('100%')
+      .padding({ top: 8 })
+      .alignItems(VerticalAlign.Center);
     }
-    .padding(12)
+    .padding({ left: 14, right: 14, top: 12, bottom: 12 })
     .backgroundColor(
       this.highlightedLinkId === item.id
         ? this.newlyAddedCardColor()
         : (this.selectedLink.id === item.id ? this.selectedCardColor() : this.cardColor())
     )
-    .borderRadius(10)
+    .borderRadius(14)
     .width('100%')
     .onClick(() => {
       this.highlightedLinkId = 0;
@@ -1470,14 +1591,19 @@ struct Index {
 
   @Builder
   private CollectionRow(collection: CollectionItem) {
-    Row({ space: 8 }) {
-      Text(collection.color.length > 0 ? '●' : '○')
-        .fontSize(14)
-        .fontColor(collection.color.length > 0 ? collection.color : this.accentColor());
+    Row({ space: 0 }) {
+      // Left color bar
+      Column()
+        .width(4)
+        .height('100%')
+        .backgroundColor(collection.color.length > 0 ? collection.color : this.accentColor())
+        .borderRadius({ topLeft: 10, bottomLeft: 10 });
 
+      // Name + description
       Column({ space: 2 }) {
         Text(collection.name.length > 0 ? collection.name : 'Untitled')
           .fontSize(14)
+          .fontWeight(FontWeight.Medium)
           .fontColor(this.primaryTextColor())
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -1495,16 +1621,20 @@ struct Index {
         }
       }
       .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start);
+      .alignItems(HorizontalAlign.Start)
+      .padding({ left: 12, top: 10, bottom: 10 });
 
+      // Link count badge
       Text(`${collection.linkCount}`)
         .fontSize(12)
-        .fontColor(this.secondaryTextColor());
+        .fontColor(this.secondaryTextColor())
+        .padding({ left: 8, right: 12, top: 10, bottom: 10 });
     }
     .width('100%')
-    .padding(10)
     .backgroundColor(this.cardColor())
-    .borderRadius(10)
+    .borderRadius(12)
+    .clip(true)
+    .alignItems(VerticalAlign.Center)
     .onClick(() => {
       this.navigateToCollection(collection.id);
     });
@@ -1897,65 +2027,179 @@ struct Index {
   @Builder
   private SettingsPanel() {
     Scroll() {
-      Column({ space: 10 }) {
-        this.SectionTitle('Settings');
+      Column({ space: 14 }) {
+        Column({ space: 6 }) {
+          this.SectionTitle('Menu');
+          this.SectionSubtitle('Refine appearance, server connection, and Linkwarden shortcuts.');
+        }
+        .padding(18)
+        .backgroundColor(this.cardColor())
+        .borderRadius(18)
+        .border({ width: 1, color: this.panelBorderColor() })
+        .width('100%');
 
-        TextInput({ placeholder: 'Server URL', text: this.settingsInstance })
-          .onChange((value: string) => {
-            this.settingsInstance = value;
-          })
+        Column({ space: 12 }) {
+          Column({ space: 4 }) {
+            Text('Linkwarden')
+              .fontSize(20)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.primaryTextColor())
+              .width('100%')
+              .textAlign(TextAlign.Start);
+
+            Text(this.instance)
+              .fontSize(12)
+              .fontColor(this.secondaryTextColor())
+              .width('100%')
+              .textAlign(TextAlign.Start)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis });
+          }
+          .width('100%')
+          .alignItems(HorizontalAlign.Start);
+
+          Row({ space: 8 }) {
+            Column() {
+              this.MenuMetricPill('Theme', this.themeModeLabel());
+            }
+            .layoutWeight(1);
+
+            Column() {
+              this.MenuMetricPill('Links', `${this.links.length}`);
+            }
+            .layoutWeight(1);
+          }
           .width('100%');
 
-        this.ThemePicker();
+          Row({ space: 8 }) {
+            Column() {
+              this.MenuMetricPill('Folders', `${this.collections.length}`);
+            }
+            .layoutWeight(1);
 
-        Text('App Settings')
-          .fontSize(14)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.primaryTextColor())
-          .width('100%')
-          .textAlign(TextAlign.Start);
+            Column() {
+              this.MenuMetricPill('Pinned', `${this.pinnedLinks.length}`);
+            }
+            .layoutWeight(1);
+          }
+          .width('100%');
+        }
+        .padding(18)
+        .backgroundColor(this.cardColor())
+        .borderRadius(18)
+        .border({ width: 1, color: this.panelBorderColor() })
+        .width('100%');
 
-        Row({ space: 8 }) {
-          Button('Save Settings')
-            .layoutWeight(1)
+        Column({ space: 10 }) {
+          Text('Appearance')
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.primaryTextColor())
+            .width('100%')
+            .textAlign(TextAlign.Start);
+
+          this.ThemePicker();
+        }
+        .padding(18)
+        .backgroundColor(this.cardColor())
+        .borderRadius(18)
+        .border({ width: 1, color: this.panelBorderColor() })
+        .width('100%');
+
+        Column({ space: 10 }) {
+          Text('Server')
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.primaryTextColor())
+            .width('100%')
+            .textAlign(TextAlign.Start);
+
+          Text('Change server endpoint. Saving a new server signs current session out.')
+            .fontSize(12)
+            .fontColor(this.secondaryTextColor())
+            .width('100%')
+            .textAlign(TextAlign.Start);
+
+          TextInput({ placeholder: 'Server URL', text: this.settingsInstance })
+            .onChange((value: string) => {
+              this.settingsInstance = value;
+            })
+            .backgroundColor(this.inputBackgroundColor())
+            .fontColor(this.primaryTextColor())
+            .borderRadius(12)
+            .width('100%');
+
+          Button('Apply Server')
+            .width('100%')
+            .height(44)
+            .backgroundColor(this.themePalette().accentSoft)
+            .fontColor(this.accentColor())
+            .borderRadius(14)
+            .border({ width: 1, color: this.accentColor() })
             .onClick(() => {
               this.handleSaveSettings();
             });
+        }
+        .padding(18)
+        .backgroundColor(this.cardColor())
+        .borderRadius(18)
+        .border({ width: 1, color: this.panelBorderColor() })
+        .width('100%');
+
+        Column({ space: 10 }) {
+          Text('Quick Links')
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.primaryTextColor())
+            .width('100%')
+            .textAlign(TextAlign.Start);
+
+          Row({ space: 10 }) {
+            this.MenuActionTile('Website', 'Open product site', () => {
+              this.openLinkInBrowser('https://linkwarden.app');
+            });
+            this.MenuActionTile('Repository', 'Open GitHub repo', () => {
+              this.openLinkInBrowser('https://github.com/linkwarden/linkwarden');
+            });
+          }
+          .width('100%');
+        }
+        .padding(18)
+        .backgroundColor(this.cardColor())
+        .borderRadius(18)
+        .border({ width: 1, color: this.panelBorderColor() })
+        .width('100%');
+
+        Column({ space: 10 }) {
+          Text('Session')
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.primaryTextColor())
+            .width('100%')
+            .textAlign(TextAlign.Start);
+
+          Text('Sign out from current Linkwarden account on this device.')
+            .fontSize(12)
+            .fontColor(this.secondaryTextColor())
+            .width('100%')
+            .textAlign(TextAlign.Start);
+
           Button('Sign Out')
-            .layoutWeight(1)
+            .width('100%')
+            .height(44)
+            .backgroundColor('transparent')
+            .fontColor(this.dangerColor())
+            .borderRadius(14)
+            .border({ width: 1, color: this.dangerColor() })
             .onClick(() => {
               this.handleSignOut();
             });
         }
+        .padding(18)
+        .backgroundColor(this.cardColor())
+        .borderRadius(18)
+        .border({ width: 1, color: this.panelBorderColor() })
         .width('100%');
-
-        Text('Linkwarden')
-          .fontSize(14)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.primaryTextColor())
-          .width('100%')
-          .textAlign(TextAlign.Start);
-
-        Row({ space: 8 }) {
-          Button('Website')
-            .layoutWeight(1)
-            .onClick(() => {
-              this.openLinkInBrowser('https://linkwarden.app');
-            });
-          Button('Repository')
-            .layoutWeight(1)
-            .onClick(() => {
-              this.openLinkInBrowser('https://github.com/linkwarden/linkwarden');
-            });
-        }
-        .width('100%');
-
-        Text('About')
-          .fontSize(14)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.primaryTextColor())
-          .width('100%')
-          .textAlign(TextAlign.Start);
 
         Text('HarmonyOS Native Client')
           .fontSize(12)
@@ -1963,9 +2207,7 @@ struct Index {
           .width('100%')
           .textAlign(TextAlign.Start);
       }
-      .padding({ left: 12, right: 12, top: 12, bottom: 96 })
-      .backgroundColor(this.cardColor())
-      .borderRadius(12)
+      .padding({ left: 12, right: 12, top: 12, bottom: 108 })
       .width('100%');
     }
     .width('100%')
@@ -1984,36 +2226,108 @@ struct Index {
         .textAlign(TextAlign.Start);
 
       Row({ space: 8 }) {
-        Button('System')
-          .layoutWeight(1)
-          .backgroundColor(this.themeMode === 'system' ? this.tabActiveColor() : this.cardColor())
-          .fontColor(this.themeMode === 'system' ? this.tabActiveTextColor() : this.primaryTextColor())
-          .borderRadius(10)
-          .onClick(() => {
-            this.themeMode = 'system';
-          });
-
-        Button('Light')
-          .layoutWeight(1)
-          .backgroundColor(this.themeMode === 'light' ? this.tabActiveColor() : this.cardColor())
-          .fontColor(this.themeMode === 'light' ? this.tabActiveTextColor() : this.primaryTextColor())
-          .borderRadius(10)
-          .onClick(() => {
-            this.themeMode = 'light';
-          });
-
-        Button('Dark')
-          .layoutWeight(1)
-          .backgroundColor(this.themeMode === 'dark' ? this.tabActiveColor() : this.cardColor())
-          .fontColor(this.themeMode === 'dark' ? this.tabActiveTextColor() : this.primaryTextColor())
-          .borderRadius(10)
-          .onClick(() => {
-            this.themeMode = 'dark';
-          });
+        ForEach(createThemeOptions(), (option: ThemeOption) => {
+          this.ThemeOptionButton(option.mode, option.title, option.subtitle);
+        }, (option: ThemeOption) => option.mode);
       }
       .width('100%');
     }
     .width('100%');
+  }
+
+  @Builder
+  private ThemeOptionButton(mode: ThemeMode, title: string, subtitle: string) {
+    Button() {
+      Column({ space: 4 }) {
+        Text(title)
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.isThemeOptionSelected(mode) ? this.tabActiveTextColor() : this.primaryTextColor())
+          .width('100%')
+          .textAlign(TextAlign.Start)
+          .maxLines(1);
+
+        Text(subtitle)
+          .fontSize(11)
+          .fontColor(this.isThemeOptionSelected(mode) ? this.tabActiveTextColor() : this.secondaryTextColor())
+          .width('100%')
+          .textAlign(TextAlign.Start)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start);
+    }
+    .layoutWeight(1)
+    .padding(12)
+    .backgroundColor(this.isThemeOptionSelected(mode) ? this.tabActiveColor() : this.inputBackgroundColor())
+    .borderRadius(14)
+    .border({ width: 1, color: this.isThemeOptionSelected(mode) ? this.tabActiveColor() : this.panelBorderColor() })
+    .onClick(() => {
+      this.themeMode = mode;
+      this.persistSessionState().catch((e: Object) => {
+        console.warn('Theme persist failed: ' + String(e));
+      });
+    });
+  }
+
+  @Builder
+  private MenuMetricPill(label: string, value: string) {
+    Column({ space: 2 }) {
+      Text(value)
+        .fontSize(14)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.primaryTextColor())
+        .textAlign(TextAlign.Center)
+        .width('100%')
+        .maxLines(1);
+
+      Text(label)
+        .fontSize(10)
+        .fontColor(this.secondaryTextColor())
+        .textAlign(TextAlign.Center)
+        .width('100%')
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis });
+    }
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+    .backgroundColor(this.inputBackgroundColor())
+    .borderRadius(14)
+    .border({ width: 1, color: this.panelBorderColor() });
+  }
+
+  @Builder
+  private MenuActionTile(title: string, subtitle: string, onClick: () => void) {
+    Button() {
+      Column({ space: 6 }) {
+        Text(title)
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.primaryTextColor())
+          .width('100%')
+          .textAlign(TextAlign.Start)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+
+        Text(subtitle)
+          .fontSize(11)
+          .fontColor(this.secondaryTextColor())
+          .width('100%')
+          .textAlign(TextAlign.Start)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start);
+    }
+    .layoutWeight(1)
+    .padding(14)
+    .backgroundColor(this.inputBackgroundColor())
+    .borderRadius(14)
+    .border({ width: 1, color: this.panelBorderColor() })
+    .onClick(() => {
+      onClick();
+    });
   }
 
   @Builder
@@ -2264,161 +2578,59 @@ struct Index {
       || this.filteredTagsForSearch().length > 0;
   }
 
-  private floatingActionsWidth(): number {
-    const count = this.mainView === 'dashboard' ? 3 : 4;
-    return count * 58 + (count - 1) * 10 + 24;
-  }
-
-  private floatingPointLightSource(symbol: string): hdsEffect.PointLightSourceType {
-    if (this.activeFloatingSymbol !== symbol) {
-      return hdsEffect.PointLightSourceType.NONE;
-    }
-
-    return this.isPrimaryFloatingAction(symbol)
-      ? hdsEffect.PointLightSourceType.BRIGHT
-      : hdsEffect.PointLightSourceType.SOFT;
-  }
-
-  private floatingPressShadow(symbol: string): hdsEffect.PressShadowType {
-    return this.pressedFloatingSymbol === symbol
-      ? hdsEffect.PressShadowType.BLEND_GRADIENT
-      : hdsEffect.PressShadowType.NONE;
-  }
-
-  private isPrimaryFloatingAction(symbol: string): boolean {
-    return false;
-  }
-
-  private floatingDockColor(): string {
-    return this.isDarkTheme() ? '#66272D33' : '#A6F7FBFF';
-  }
-
-  private floatingDockBorderColor(): string {
-    return this.isDarkTheme() ? '#42FFFFFF' : '#88FFFFFF';
-  }
-
   private floatingDockShadowColor(): string {
-    return this.isDarkTheme() ? '#26000000' : '#1A6A7E99';
+    return this.themePalette().dockShadow;
   }
 
-  private floatingButtonShellColor(symbol: string): string {
-    if (this.isPrimaryFloatingAction(symbol)) {
-      return this.isDarkTheme() ? '#42FFFFFF' : '#B8FFFFFF';
+  private handleQuickMenuAction(actionId: 'add' | 'search' | 'settings'): void {
+    this.quickMenuOpen = false;
+
+    if (actionId === 'add') {
+      this.openAddModal();
+      return;
     }
 
-    if (this.isSelectedFloatingAction(symbol)) {
-      return this.isDarkTheme() ? '#30FFFFFF' : '#8CFFFFFF';
+    if (actionId === 'search') {
+      this.mainView = 'search';
+      this.refreshLinks(true);
+      this.refreshDashboard();
+      return;
     }
 
-    return this.isDarkTheme() ? '#14FFFFFF' : '#52FFFFFF';
+    this.mainView = 'settings';
+    this.settingsInstance = this.instance;
   }
 
-  private floatingButtonFill(symbol: string): string {
-    if (this.isPrimaryFloatingAction(symbol)) {
-      return this.isDarkTheme() ? '#18FFFFFF' : '#D9FFFFFF';
-    }
-
-    if (this.isSelectedFloatingAction(symbol)) {
-      return this.isDarkTheme() ? '#18FFFFFF' : '#A8FFFFFF';
-    }
-
-    return Color.Transparent.toString();
-  }
-
-  private floatingButtonBorder(symbol: string): string {
-    if (this.isPrimaryFloatingAction(symbol)) {
-      return this.isDarkTheme() ? '#76FFFFFF' : '#F2FFFFFF';
-    }
-
-    if (this.isSelectedFloatingAction(symbol)) {
-      return this.isDarkTheme() ? '#52FFFFFF' : '#AEFFFFFF';
-    }
-
-    return this.isDarkTheme() ? '#22FFFFFF' : '#7AFFFFFF';
-  }
-
-  private floatingButtonTextColor(symbol: string): string {
-    if (this.isPrimaryFloatingAction(symbol)) {
-      return this.isDarkTheme() ? '#F7FBFF' : '#234660';
-    }
-
-    if (this.isSelectedFloatingAction(symbol)) {
-      return this.isDarkTheme() ? '#F6FBFF' : '#234660';
-    }
-
-    return this.isDarkTheme() ? '#D8E8F2' : '#4B657A';
-  }
-
-  private floatingButtonLabel(symbol: string): string {
-    if (symbol === '⌂') {
+  private mainViewTitle(): string {
+    if (this.mainView === 'dashboard') {
       return 'Home';
     }
 
-    if (symbol === '＋') {
-      return 'Add';
+    if (this.mainView === 'elements') {
+      return 'Library';
     }
 
-    if (symbol === '⌕') {
-      return 'Find';
+    if (this.mainView === 'search') {
+      return 'Search';
     }
 
-    if (symbol === '⋯') {
-      return 'Menu';
-    }
-
-    return symbol;
+    return 'Menu';
   }
 
-  private floatingButtonGlyph(symbol: string): string {
-    if (symbol === '＋') {
-      return '+';
+  private mainViewSubtitle(): string {
+    if (this.mainView === 'dashboard') {
+      return 'Recent, pinned, and collections';
     }
 
-    if (symbol === '⋯') {
-      return '≡';
+    if (this.mainView === 'elements') {
+      return 'Links, collections, and tags';
     }
 
-    return symbol;
-  }
-
-  private floatingButtonFontSize(symbol: string): number {
-    if (symbol === '＋') {
-      return 24;
+    if (this.mainView === 'search') {
+      return 'Find links, collections, and tags';
     }
 
-    if (symbol === '⋯') {
-      return 18;
-    }
-
-    return this.isPrimaryFloatingAction(symbol) ? 22 : 19;
-  }
-
-  private floatingButtonShadow(symbol: string): string {
-    if (this.isPrimaryFloatingAction(symbol)) {
-      return this.isDarkTheme() ? '#18000000' : '#145A7080';
-    }
-
-    if (this.isSelectedFloatingAction(symbol)) {
-      return this.isDarkTheme() ? '#16000000' : '#145A7080';
-    }
-
-    return '#0F000000';
-  }
-
-  private isSelectedFloatingAction(symbol: string): boolean {
-    if (symbol === '⌕') {
-      return this.mainView === 'search';
-    }
-
-    if (symbol === '⋯') {
-      return this.mainView === 'settings';
-    }
-
-    if (symbol === '⌂') {
-      return this.mainView === 'dashboard';
-    }
-
-    return false;
+    return 'Settings and shortcuts';
   }
 
   private handleNewLinkUrlChange(value: string): void {
@@ -2941,7 +3153,7 @@ struct Index {
   }
 
   private tabActiveColor(): string {
-    return this.isDarkTheme() ? '#0ea5e9' : '#2563eb';
+    return this.themePalette().accentStrong;
   }
 
   private tabActiveTextColor(): string {
@@ -2949,43 +3161,105 @@ struct Index {
   }
 
   private surfaceColor(): string {
-    return this.isDarkTheme() ? '#111827' : '#f3f4f6';
+    return this.themePalette().surface;
   }
 
   private pageColor(): string {
-    return this.isDarkTheme() ? '#030712' : '#ffffff';
+    return this.themePalette().page;
   }
 
   private cardColor(): string {
-    return this.isDarkTheme() ? '#1f2937' : '#ffffff';
+    return this.themePalette().card;
   }
 
   private selectedCardColor(): string {
-    return this.isDarkTheme() ? '#0f766e' : '#e0f2fe';
+    return this.themePalette().cardSelected;
   }
 
   private newlyAddedCardColor(): string {
-    return this.isDarkTheme() ? '#14532d' : '#dcfce7';
+    return this.themePalette().cardSuccess;
   }
 
   private primaryTextColor(): string {
-    return this.isDarkTheme() ? '#f9fafb' : '#111827';
+    return this.themePalette().textPrimary;
   }
 
   private secondaryTextColor(): string {
-    return this.isDarkTheme() ? '#d1d5db' : '#6b7280';
+    return this.themePalette().textSecondary;
   }
 
   private accentColor(): string {
-    return this.isDarkTheme() ? '#67e8f9' : '#2563eb';
+    return this.themePalette().accent;
   }
 
   private dangerColor(): string {
-    return '#dc2626';
+    return this.themePalette().danger;
+  }
+
+  private panelBorderColor(): string {
+    return this.themePalette().border;
+  }
+
+  private inputBackgroundColor(): string {
+    return this.themePalette().input;
+  }
+
+  private primaryActionBackgroundColor(): string {
+    return this.isDarkTheme() ? this.tabActiveColor() : this.themePalette().accentStrong;
+  }
+
+  private primaryActionTextColor(): string {
+    return '#ffffff';
+  }
+
+  private primaryActionShadowColor(): string {
+    return this.isDarkTheme() ? '#30000000' : '#1f2563eb';
+  }
+
+  private fabBackgroundColor(): string {
+    return this.cardColor();
+  }
+
+  private fabIconColor(): string {
+    return this.accentColor();
+  }
+
+  private fabBorderColor(): string {
+    return this.themePalette().border;
+  }
+
+  private secondaryActionBackgroundColor(): string {
+    return this.themePalette().accentSoft;
+  }
+
+  private secondaryActionTextColor(): string {
+    return this.accentColor();
+  }
+
+  private themeModeLabel(): string {
+    if (this.themeMode === 'dark') {
+      return 'Dark';
+    }
+
+    if (this.themeMode === 'light') {
+      return 'Light';
+    }
+
+    return 'System';
+  }
+
+  private isThemeOptionSelected(mode: ThemeMode): boolean {
+    return this.themeMode === mode;
+  }
+
+  private themePalette() {
+    const effectiveMode: ThemeMode =
+      (this.themeMode === 'system' && this.deviceDarkMode) ? 'dark' : this.themeMode;
+    return createThemePalette(effectiveMode);
   }
 
   private isDarkTheme(): boolean {
-    return this.themeMode === 'dark';
+    return this.themeMode === 'dark' || (this.themeMode === 'system' && this.deviceDarkMode);
   }
 
   private syncApiContext(): void {
@@ -2996,8 +3270,19 @@ struct Index {
   }
 
   onBackPress(): boolean {
+    if (this.quickMenuOpen) {
+      this.quickMenuOpen = false;
+      return true;
+    }
+
     if (this.activeModal !== 'none') {
       this.closeCurrentModal();
+      return true;
+    }
+
+    if (shouldReturnToDashboard(this.mainView)) {
+      this.mainView = 'dashboard';
+      this.refreshDashboard();
       return true;
     }
 

@@ -1,0 +1,12 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "鸿笺"
+    },
+    {
+      "name": "module_desc",
+      "value": "鸿笺 - 链接收藏管理"
+    }
+  ]
+}
