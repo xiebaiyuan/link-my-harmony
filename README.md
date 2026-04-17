@@ -4,6 +4,8 @@ An **unofficial, third‑party HarmonyOS Next client for [Linkwarden](https://gi
 
 > **Not affiliated with Linkwarden.** This project is an independent client. All server‑side logic, API design, and the name "Linkwarden" belong to the upstream project — please send server‑side issues there, not here.
 
+> 📖 中文说明见 [`README.zh-CN.md`](./README.zh-CN.md)
+
 <p>
   <img alt="Platform" src="https://img.shields.io/badge/platform-HarmonyOS%20Next-1F6FEB">
   <img alt="Language" src="https://img.shields.io/badge/lang-ArkTS-3178C6">
@@ -38,6 +40,41 @@ A spiritual thank‑you also to [`JGeek00/MyLinks`](https://github.com/JGeek00/m
 - i18n: 简体中文 / English
 
 Not yet covered: RSS, archival downloads, bulk actions, import/export.
+
+## Downloads
+
+Every tag `v*` pushed to this repo triggers [`.github/workflows/release.yml`](./.github/workflows/release.yml) to build an **unsigned HAP** on a public GitHub runner (via the community [`harmony-next-pipeline-docker`](https://github.com/sanchuanhehe/harmony-next-pipeline-docker) image) and publish it as a GitHub Release.
+
+Grab the latest HAP from the [Releases page](../../releases/latest).
+
+### Why unsigned?
+
+HarmonyOS signing certs are tied to an AppGallery Connect bundle ID that belongs to an individual developer account — I can't redistribute a signed build that will install cleanly on your device. The CI therefore produces an unsigned HAP that you sideload yourself.
+
+### Install an unsigned HAP
+
+**Option 1 — [auto-installer](https://github.com/likuai2010/auto-installer) (recommended, GUI):**
+
+1. Download the latest [auto-installer release](https://github.com/likuai2010/auto-installer/releases).
+2. On the phone: Settings → About → Version → tap the version number 7 times to enable Developer Mode, then enable USB debugging.
+3. Connect via USB, drop the `.hap` into auto-installer, click install.
+
+**Option 2 — `hdc` CLI (needs HarmonyOS SDK):**
+
+```bash
+hdc install -r link-my-harmony-vX.Y.Z.hap
+```
+
+### Cutting a release
+
+```bash
+# bump versionName in harmony/AppScope/app.json5 first
+git tag v0.2.0
+git push origin v0.2.0
+# GitHub Actions builds the HAP and attaches it to the v0.2.0 release
+```
+
+You can also trigger the workflow manually from the Actions tab (`workflow_dispatch`) for a dry run — it will upload the HAP as a build artifact without creating a release.
 
 ## Requirements
 
@@ -170,3 +207,4 @@ This repository does **not** incorporate any source code from the upstream Linkw
 - **Linkwarden team** — for building the only self‑hosted bookmark manager I actually use.
 - **JGeek00** — for `MyLinks`, the iOS client that inspired this one.
 - HarmonyOS ArkUI / ArkTS team — for the Stage model and the 6.x toolchain.
+- **[harmony-next-pipeline-docker](https://github.com/sanchuanhehe/harmony-next-pipeline-docker)** — for making HarmonyOS Next CI on public GitHub runners possible.

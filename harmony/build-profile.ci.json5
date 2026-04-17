@@ -1,0 +1,34 @@
+{
+  // Signing-free variant of build-profile.json5 used by the GitHub Actions
+  // release workflow. Copied into place via
+  //   cp harmony/build-profile.ci.json5 harmony/build-profile.json5
+  // before `hvigorw assembleHap` runs in the CI container. Produces an
+  // UNSIGNED HAP — see README for how to sideload it.
+  "app": {
+    "signingConfigs": [],
+    "products": [
+      {
+        "name": "default",
+        "compatibleSdkVersion": "6.0.0(20)",
+        "targetSdkVersion": "6.0.0(20)",
+        "runtimeOS": "HarmonyOS"
+      }
+    ],
+    "buildModeSet": [
+      { "name": "debug" },
+      { "name": "release" }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": ["default"]
+        }
+      ]
+    }
+  ]
+}
