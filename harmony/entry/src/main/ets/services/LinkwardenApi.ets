@@ -1,6 +1,6 @@
 import http from '@ohos.net.http';
 import type { BusinessError } from '@ohos.base';
-import type { LinkItem, PagedLinks, CollectionItem } from '../common/Models';
+import type { LinkItem, PagedLinks, CollectionItem, LinkTag } from '../common/Models';
 import { buildQueryString, normalizeInstanceUrl } from '../common/Query';
 import type { LinkSearchQueryParams } from '../common/Query';
 import {
@@ -17,6 +17,34 @@ import type {
   CollectionsResponse,
   LinkPayload,
 } from '../common/LinkMapper';
+
+interface TagPayload {
+  id?: number;
+  name?: string;
+}
+
+interface PaginatedTagsPayload {
+  tags?: Array<TagPayload>;
+  nextCursor?: number | null;
+}
+
+interface TagsResponse {
+  response?: Array<TagPayload> | PaginatedTagsPayload;
+}
+
+interface DashboardV2Data {
+  numberOfPinnedLinks?: number;
+  numberOfTags?: number;
+}
+
+interface DashboardV2Response {
+  data?: DashboardV2Data;
+}
+
+export interface DashboardTotals {
+  numberOfPinnedLinks: number;
+  numberOfTags: number | null;
+}
 
 interface SignInRequest {
   username: string;
@@ -181,6 +209,41 @@ export class LinkwardenApi {
     const responseText = await this.request('/api/v1/collections', http.RequestMethod.GET);
     const response = JSON.parse(responseText) as CollectionsResponse;
     return mapCollectionsResponse(response);
+  }
+
+  async fetchTags(): Promise<Array<LinkTag>> {
+    const responseText = await this.request('/api/v1/tags', http.RequestMethod.GET);
+    const response = JSON.parse(responseText) as TagsResponse;
+    const payload = response.response;
+    let items: Array<TagPayload> = [];
+    if (Array.isArray(payload)) {
+      items = payload;
+    } else if (payload && Array.isArray(payload.tags)) {
+      items = payload.tags;
+    }
+    const tags: Array<LinkTag> = [];
+    items.forEach((item: TagPayload) => {
+      const id = typeof item.id === 'number' ? item.id : 0;
+      const name = typeof item.name === 'string' ? item.name.trim() : '';
+      if (id > 0 && name.length > 0) {
+        tags.push({ id, name });
+      }
+    });
+    return tags;
+  }
+
+  async fetchDashboardTotals(): Promise<DashboardTotals> {
+    const responseText = await this.request('/api/v2/dashboard', http.RequestMethod.GET);
+    const response = JSON.parse(responseText) as DashboardV2Response;
+    const data = response.data;
+    const pinned = data?.numberOfPinnedLinks;
+    const tags = data?.numberOfTags;
+    return {
+      numberOfPinnedLinks:
+        typeof pinned === 'number' && Number.isFinite(pinned) && pinned >= 0 ? pinned : 0,
+      numberOfTags:
+        typeof tags === 'number' && Number.isFinite(tags) && tags >= 0 ? tags : null,
+    };
   }
 
   async getLink(id: number): Promise<LinkItem> {

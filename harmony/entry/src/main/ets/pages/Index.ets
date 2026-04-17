@@ -1,6 +1,7 @@
 import type common from '@ohos.app.ability.common';
 import { emptyLinkItem, type LinkItem, type CollectionItem, type LinkTag } from '../common/Models';
 import { LinkwardenApi } from '../services/LinkwardenApi';
+import type { DashboardTotals } from '../services/LinkwardenApi';
 import { normalizeInstanceUrl } from '../common/Query';
 import {
   createDefaultSessionState,
@@ -58,6 +59,11 @@ struct Index {
   @State pinnedLinks: Array<LinkItem> = [];
   @State homePreviewLinks: Array<LinkItem> = [];
   @State collections: Array<CollectionItem> = [];
+  @State knownTagNames: Array<string> = [];
+  @State allTags: Array<LinkTag> = [];
+  @State pinnedTotal: number = -1;
+  @State tagsTotal: number = -1;
+  @State linksTotal: number = -1;
   @State nextCursor: number = 0;
   @State hasMore: boolean = true;
 
@@ -303,7 +309,7 @@ struct Index {
 
       if (this.mainView === 'dashboard') {
         Column() {
-          Refresh({ refreshing: this.dashboardRefreshing }) {
+          Refresh({ refreshing: $$this.dashboardRefreshing }) {
             Scroll() {
               Column({ space: 10 }) {
                 this.DashboardPanel();
@@ -390,6 +396,7 @@ struct Index {
     .onClick(() => {
       this.quickMenuOpen = false;
       this.mainView = 'dashboard';
+      this.refreshDashboard();
     });
   }
 
@@ -584,6 +591,33 @@ struct Index {
       .width('100%')
       .alignItems(VerticalAlign.Center);
 
+      if (this.selectedCollectionFilterId > 0) {
+        Row({ space: 6 }) {
+          Text('🗂')
+            .fontSize(12);
+          Text(this.activeCollectionName())
+            .fontSize(12)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.tabActiveTextColor())
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1);
+          Text('✕')
+            .fontSize(12)
+            .fontColor(this.tabActiveTextColor())
+            .onClick(() => {
+              this.selectedCollectionFilterId = 0;
+              this.refreshLinks(true);
+            });
+        }
+        .width('100%')
+        .padding({ left: 12, right: 12 })
+        .height(32)
+        .backgroundColor(this.tabActiveColor())
+        .borderRadius(999)
+        .alignItems(VerticalAlign.Center);
+      }
+
       if (this.links.length === 0) {
         Text(this.loading ? 'Loading links…' : 'No links yet.')
           .fontSize(13)
@@ -623,40 +657,43 @@ struct Index {
 
   @Builder
   private CollectionsPanel() {
-    Scroll() {
-      Column({ space: 8 }) {
+    Column({ space: 10 }) {
+      Row({ space: 8 }) {
         this.SectionSubtitle(`${this.filteredCollections().length} collections`);
-
-        TextInput({ placeholder: 'Search collections', text: this.collectionSearchQuery })
-          .onChange((value: string) => {
-            this.collectionSearchQuery = value;
-          })
-          .backgroundColor(this.inputBackgroundColor())
-          .fontColor(this.primaryTextColor())
-          .borderRadius(12)
-          .width('100%');
-
-        if (this.filteredCollections().length === 0) {
-          Text(this.collections.length === 0 ? 'No collections.' : 'No collections match this search.')
-            .fontSize(13)
-            .fontColor(this.secondaryTextColor())
-            .width('100%')
-            .textAlign(TextAlign.Start)
-            .padding({ top: 8, bottom: 8 });
-        } else {
-          ForEach(this.filteredCollections(), (collection: CollectionItem) => {
-            this.CollectionRow(collection);
-          }, (collection: CollectionItem) => `collection-panel-${collection.id}`);
-        }
       }
-      .justifyContent(FlexAlign.Start)
-      .alignItems(HorizontalAlign.Start)
-      .width('100%')
-      .padding({ bottom: 96 });
+      .width('100%');
+
+      TextInput({ placeholder: 'Search collections', text: this.collectionSearchQuery })
+        .onChange((value: string) => {
+          this.collectionSearchQuery = value;
+        })
+        .backgroundColor(this.inputBackgroundColor())
+        .fontColor(this.primaryTextColor())
+        .borderRadius(12)
+        .width('100%');
+
+      if (this.filteredCollections().length === 0) {
+        Text(this.collections.length === 0 ? 'No collections.' : 'No collections match this search.')
+          .fontSize(13)
+          .fontColor(this.secondaryTextColor())
+          .width('100%')
+          .textAlign(TextAlign.Start)
+          .padding({ top: 8, bottom: 8 });
+      }
+
+      List({ space: 8 }) {
+        ForEach(this.filteredCollections(), (collection: CollectionItem) => {
+          ListItem() {
+            this.CollectionRow(collection);
+          };
+        }, (collection: CollectionItem) => `collection-panel-${collection.id}`)
+      }
+      .divider({ strokeWidth: 0 })
+      .layoutWeight(1)
+      .width('100%');
     }
-    .width('100%')
     .height('100%')
-    .scrollBar(BarState.Off);
+    .width('100%');
   }
 
   @Builder
@@ -1181,6 +1218,8 @@ struct Index {
   @Builder
   private DashboardPanel() {
     Column({ space: 10 }) {
+      this.DashboardShortcuts();
+
       this.HorizontalLinkStrip(
         '📌 Pinned Links',
         this.pinnedLinks.slice(0, 10),
@@ -1198,8 +1237,6 @@ struct Index {
           this.navigateToRecentLinks();
         }
       );
-
-      this.DashboardShortcuts();
 
       if (this.collectionPreviewSections().length === 0) {
         this.SectionLinkTitle('Collections', () => {
@@ -1224,20 +1261,20 @@ struct Index {
   private DashboardShortcuts() {
     Column({ space: 8 }) {
       Row({ space: 8 }) {
-        this.DashboardShortcutCard('Links', '🔗', `${this.links.length}`, () => {
+        this.DashboardShortcutCard('Links', '🔗', this.formatCount(this.linksTotal), () => {
           this.navigateToAllLinks();
         });
-        this.DashboardShortcutCard('Collections', '🗂', `${this.collections.length}`, () => {
+        this.DashboardShortcutCard('Collections', '🗂', this.formatCollectionsCount(), () => {
           this.navigateToCollections();
         });
       }
       .width('100%');
 
       Row({ space: 8 }) {
-        this.DashboardShortcutCard('Tags', '#', `${this.uniqueTags().length}`, () => {
+        this.DashboardShortcutCard('Tags', '#', this.formatCount(this.tagsTotal), () => {
           this.navigateToTags();
         });
-        this.DashboardShortcutCard('Pinned', '📌', `${this.pinnedLinks.length}`, () => {
+        this.DashboardShortcutCard('Pinned', '📌', this.formatCount(this.pinnedTotal), () => {
           this.navigateToPinnedLinks();
         });
       }
@@ -1592,13 +1629,6 @@ struct Index {
   @Builder
   private CollectionRow(collection: CollectionItem) {
     Row({ space: 0 }) {
-      // Left color bar
-      Column()
-        .width(4)
-        .height('100%')
-        .backgroundColor(collection.color.length > 0 ? collection.color : this.accentColor())
-        .borderRadius({ topLeft: 10, bottomLeft: 10 });
-
       // Name + description
       Column({ space: 2 }) {
         Text(collection.name.length > 0 ? collection.name : 'Untitled')
@@ -1633,6 +1663,11 @@ struct Index {
     .width('100%')
     .backgroundColor(this.cardColor())
     .borderRadius(12)
+    .border({
+      width: { left: 4 },
+      color: collection.color.length > 0 ? collection.color : this.accentColor(),
+      radius: 12,
+    })
     .clip(true)
     .alignItems(VerticalAlign.Center)
     .onClick(() => {
@@ -2059,28 +2094,92 @@ struct Index {
           .alignItems(HorizontalAlign.Start);
 
           Row({ space: 8 }) {
-            Column() {
-              this.MenuMetricPill('Theme', this.themeModeLabel());
+            Column({ space: 2 }) {
+              Text(this.themeModeLabel())
+                .fontSize(14)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(this.primaryTextColor())
+                .textAlign(TextAlign.Center)
+                .width('100%')
+                .maxLines(1);
+              Text('Theme')
+                .fontSize(10)
+                .fontColor(this.secondaryTextColor())
+                .textAlign(TextAlign.Center)
+                .width('100%')
+                .maxLines(1);
             }
-            .layoutWeight(1);
+            .layoutWeight(1)
+            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+            .backgroundColor(this.inputBackgroundColor())
+            .borderRadius(14)
+            .border({ width: 1, color: this.panelBorderColor() });
 
-            Column() {
-              this.MenuMetricPill('Links', `${this.links.length}`);
+            Column({ space: 2 }) {
+              Text(this.formatCount(this.linksTotal))
+                .fontSize(14)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(this.primaryTextColor())
+                .textAlign(TextAlign.Center)
+                .width('100%')
+                .maxLines(1);
+              Text('Links')
+                .fontSize(10)
+                .fontColor(this.secondaryTextColor())
+                .textAlign(TextAlign.Center)
+                .width('100%')
+                .maxLines(1);
             }
-            .layoutWeight(1);
+            .layoutWeight(1)
+            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+            .backgroundColor(this.inputBackgroundColor())
+            .borderRadius(14)
+            .border({ width: 1, color: this.panelBorderColor() });
           }
           .width('100%');
 
           Row({ space: 8 }) {
-            Column() {
-              this.MenuMetricPill('Folders', `${this.collections.length}`);
+            Column({ space: 2 }) {
+              Text(this.formatCount(this.tagsTotal))
+                .fontSize(14)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(this.primaryTextColor())
+                .textAlign(TextAlign.Center)
+                .width('100%')
+                .maxLines(1);
+              Text('Tags')
+                .fontSize(10)
+                .fontColor(this.secondaryTextColor())
+                .textAlign(TextAlign.Center)
+                .width('100%')
+                .maxLines(1);
             }
-            .layoutWeight(1);
+            .layoutWeight(1)
+            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+            .backgroundColor(this.inputBackgroundColor())
+            .borderRadius(14)
+            .border({ width: 1, color: this.panelBorderColor() });
 
-            Column() {
-              this.MenuMetricPill('Pinned', `${this.pinnedLinks.length}`);
+            Column({ space: 2 }) {
+              Text(this.formatCount(this.pinnedTotal))
+                .fontSize(14)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(this.primaryTextColor())
+                .textAlign(TextAlign.Center)
+                .width('100%')
+                .maxLines(1);
+              Text('Pinned')
+                .fontSize(10)
+                .fontColor(this.secondaryTextColor())
+                .textAlign(TextAlign.Center)
+                .width('100%')
+                .maxLines(1);
             }
-            .layoutWeight(1);
+            .layoutWeight(1)
+            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+            .backgroundColor(this.inputBackgroundColor())
+            .borderRadius(14)
+            .border({ width: 1, color: this.panelBorderColor() });
           }
           .width('100%');
         }
@@ -2290,6 +2389,7 @@ struct Index {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis });
     }
+    .width('100%')
     .padding({ left: 12, right: 12, top: 10, bottom: 10 })
     .backgroundColor(this.inputBackgroundColor())
     .borderRadius(14)
@@ -2501,23 +2601,67 @@ struct Index {
       });
   }
 
-  private uniqueTags(): Array<string> {
-    const tagMap: Record<string, string> = {};
-    this.links.forEach((item: LinkItem) => {
+  private mergeTagsFromLinks(links: Array<LinkItem>): void {
+    const existingKeys = new Set(this.knownTagNames.map((t) => t.toLowerCase()));
+    const additions: Array<string> = [];
+    links.forEach((item: LinkItem) => {
       item.tags.forEach((tag) => {
         const value = tag.name.trim();
         if (value.length > 0) {
           const key = value.toLowerCase();
-          if (tagMap[key] === undefined) {
-            tagMap[key] = value;
+          if (!existingKeys.has(key)) {
+            existingKeys.add(key);
+            additions.push(value);
           }
         }
       });
     });
+    if (additions.length > 0) {
+      this.knownTagNames = [...this.knownTagNames, ...additions].sort((a, b) =>
+        a.toLowerCase().localeCompare(b.toLowerCase())
+      );
+    }
+  }
 
-    return Object.keys(tagMap)
-      .sort((a, b) => a.localeCompare(b))
-      .map((key) => tagMap[key]);
+  private mergeTagNamesFromTags(tags: Array<LinkTag>): void {
+    const names = tags
+      .map((tag) => tag.name.trim())
+      .filter((name) => name.length > 0);
+    const existingKeys = new Set(this.knownTagNames.map((t) => t.toLowerCase()));
+    const additions: Array<string> = [];
+    names.forEach((name) => {
+      const key = name.toLowerCase();
+      if (!existingKeys.has(key)) {
+        existingKeys.add(key);
+        additions.push(name);
+      }
+    });
+    if (additions.length > 0) {
+      this.knownTagNames = [...this.knownTagNames, ...additions].sort((a, b) =>
+        a.toLowerCase().localeCompare(b.toLowerCase())
+      );
+    }
+  }
+
+  private uniqueTags(): Array<string> {
+    return this.knownTagNames;
+  }
+
+  private formatCount(value: number): string {
+    return value < 0 ? '–' : `${value}`;
+  }
+
+  private formatCollectionsCount(): string {
+    if (this.collections.length > 0) {
+      return `${this.collections.length}`;
+    }
+    return this.dashboardLoading ? '–' : '0';
+  }
+
+  private activeCollectionName(): string {
+    const id = this.selectedCollectionFilterId;
+    const matches = this.collections.filter((c: CollectionItem) => c.id === id);
+    return matches.length > 0 ? matches[0].name : `Collection #${id}`;
   }
 
   private filteredCollections(): Array<CollectionItem> {
@@ -3316,8 +3460,7 @@ struct Index {
 
       if (this.token.length > 0) {
         await this.ensureCurrentUserId();
-        await this.refreshLinks(true);
-        await this.refreshDashboard();
+        await Promise.all([this.refreshLinks(true), this.refreshDashboard()]);
         await this.consumeSharedUrlAndMaybeSave();
 
         if (this.notice.length === 0) {
@@ -3420,6 +3563,11 @@ struct Index {
       this.pinnedLinks = [];
       this.homePreviewLinks = [];
       this.collections = [];
+      this.knownTagNames = [];
+      this.allTags = [];
+      this.pinnedTotal = -1;
+      this.tagsTotal = -1;
+      this.linksTotal = -1;
       this.nextCursor = 0;
       this.hasMore = true;
       this.selectedCollectionFilterId = 0;
@@ -3459,8 +3607,7 @@ struct Index {
       this.syncApiContext();
       this.currentUserId = await this.api.fetchCurrentUserId();
       await this.persistSessionState();
-      await this.refreshLinks(true);
-      await this.refreshDashboard();
+      await Promise.all([this.refreshLinks(true), this.refreshDashboard()]);
       await this.consumeSharedUrlAndMaybeSave();
       this.setNotice('Signed in successfully.', false);
     } catch (error) {
@@ -3717,6 +3864,11 @@ struct Index {
     this.pinnedLinks = [];
     this.homePreviewLinks = [];
     this.collections = [];
+    this.knownTagNames = [];
+    this.allTags = [];
+    this.pinnedTotal = -1;
+    this.tagsTotal = -1;
+    this.linksTotal = -1;
     this.nextCursor = 0;
     this.hasMore = true;
     this.selectedCollectionFilterId = 0;
@@ -3738,11 +3890,8 @@ struct Index {
     this.setNotice('Signed out.', false);
   }
 
-  private async handleDashboardPullRefresh(): Promise<void> {
-    if (this.dashboardRefreshing) {
-      return;
-    }
 
+  private async handleDashboardPullRefresh(): Promise<void> {
     this.dashboardRefreshing = true;
     try {
       await Promise.all([
@@ -3784,6 +3933,7 @@ struct Index {
       } else {
         this.links = this.links.concat(page.links);
       }
+      this.mergeTagsFromLinks(page.links);
 
       this.nextCursor = page.nextCursor;
       this.hasMore = page.nextCursor >= 0;
@@ -3814,15 +3964,43 @@ struct Index {
         this.api.fetchPinnedLinks(),
         this.api.fetchCollections(),
         this.api.fetchLinks(0, '', 0, false),
+        this.fetchTagsOrEmpty(),
+        this.fetchDashboardTotalsOrNull(),
       ]);
       this.dashboardLinks = result[0];
       this.pinnedLinks = result[1];
       this.collections = result[2];
       this.homePreviewLinks = result[3].links;
+      this.allTags = result[4];
+      const totals: DashboardTotals | null = result[5];
+      this.pinnedTotal = totals !== null ? totals.numberOfPinnedLinks : result[1].length;
+      this.tagsTotal = totals !== null && totals.numberOfTags !== null
+        ? totals.numberOfTags
+        : result[4].length;
+      this.linksTotal = result[2].reduce((sum: number, c: CollectionItem) => sum + c.linkCount, 0);
+      this.mergeTagNamesFromTags(result[4]);
     } catch (error) {
       this.setNotice(`Fetch dashboard failed: ${this.formatError(error)}`, true);
     } finally {
       this.dashboardLoading = false;
+    }
+  }
+
+  private async fetchTagsOrEmpty(): Promise<Array<LinkTag>> {
+    try {
+      return await this.api.fetchTags();
+    } catch (error) {
+      console.info(`Index fetchTags failed: ${this.formatError(error)}`);
+      return [];
+    }
+  }
+
+  private async fetchDashboardTotalsOrNull(): Promise<DashboardTotals | null> {
+    try {
+      return await this.api.fetchDashboardTotals();
+    } catch (error) {
+      console.info(`Index fetchDashboardTotals failed: ${this.formatError(error)}`);
+      return null;
     }
   }
 
