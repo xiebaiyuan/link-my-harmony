@@ -71,6 +71,9 @@ struct Index {
   @State dashboardLoading: boolean = false;
   @State dashboardRefreshing: boolean = false;
   @State loadingMore: boolean = false;
+  @State linksRefreshing: boolean = false;
+  @State collectionsRefreshing: boolean = false;
+  @State tagsRefreshing: boolean = false;
   @State restoring: boolean = true;
   @State notice: string = '';
   @State noticeIsError: boolean = false;
@@ -627,28 +630,45 @@ struct Index {
           .padding({ top: 24, bottom: 8 });
       }
 
-      List({ space: 8 }) {
-        ForEach(this.links, (item: LinkItem) => {
-          ListItem() {
-            this.LinkCard(item);
-          };
-        }, (item: LinkItem) => `${item.id}-${item.url}`)
+      Refresh({ refreshing: $$this.linksRefreshing }) {
+        List({ space: 8 }) {
+          ForEach(this.links, (item: LinkItem) => {
+            ListItem() {
+              this.LinkCard(item);
+            };
+          }, (item: LinkItem) => `${item.id}-${item.url}`)
+        }
+        .divider({ strokeWidth: 0 })
+        .width('100%')
+        .height('100%')
+        .onReachEnd(() => {
+          if (this.hasMore && !this.loadingMore && !this.loading) {
+            this.refreshLinks(false);
+          }
+        });
       }
-      .divider({ strokeWidth: 0 })
       .layoutWeight(1)
-      .width('100%');
+      .width('100%')
+      .onStateChange((state: RefreshStatus) => {
+        if (state === RefreshStatus.Refresh) {
+          this.handleLibraryLinksPullRefresh();
+        }
+      });
 
-      if (this.hasMore) {
-        Text(this.loadingMore ? 'Loading more…' : 'Load more')
-          .enabled(!this.loadingMore)
-          .fontSize(13)
-          .fontColor(this.accentColor())
+      if (this.loadingMore) {
+        Text('Loading more…')
+          .fontSize(12)
+          .fontColor(this.secondaryTextColor())
           .width('100%')
           .textAlign(TextAlign.Center)
-          .padding({ top: 8, bottom: 8 })
-          .onClick(() => {
-            this.refreshLinks(false);
-          });
+          .padding({ top: 8, bottom: 8 });
+      } else if (!this.hasMore && this.links.length > 0) {
+        Text('No more links')
+          .fontSize(12)
+          .fontColor(this.secondaryTextColor())
+          .width('100%')
+          .textAlign(TextAlign.Center)
+          .padding({ top: 8, bottom: 8 });
       }
     }
     .height('100%')
@@ -681,16 +701,25 @@ struct Index {
           .padding({ top: 8, bottom: 8 });
       }
 
-      List({ space: 8 }) {
-        ForEach(this.filteredCollections(), (collection: CollectionItem) => {
-          ListItem() {
-            this.CollectionRow(collection);
-          };
-        }, (collection: CollectionItem) => `collection-panel-${collection.id}`)
+      Refresh({ refreshing: $$this.collectionsRefreshing }) {
+        List({ space: 8 }) {
+          ForEach(this.filteredCollections(), (collection: CollectionItem) => {
+            ListItem() {
+              this.CollectionRow(collection);
+            };
+          }, (collection: CollectionItem) => `collection-panel-${collection.id}`)
+        }
+        .divider({ strokeWidth: 0 })
+        .width('100%')
+        .height('100%');
       }
-      .divider({ strokeWidth: 0 })
       .layoutWeight(1)
-      .width('100%');
+      .width('100%')
+      .onStateChange((state: RefreshStatus) => {
+        if (state === RefreshStatus.Refresh) {
+          this.handleLibraryCollectionsPullRefresh();
+        }
+      });
     }
     .height('100%')
     .width('100%');
@@ -698,40 +727,49 @@ struct Index {
 
   @Builder
   private TagsPanel() {
-    Scroll() {
-      Column({ space: 8 }) {
-        this.SectionSubtitle(`${this.filteredTags().length} tags`);
+    Refresh({ refreshing: $$this.tagsRefreshing }) {
+      Scroll() {
+        Column({ space: 8 }) {
+          this.SectionSubtitle(`${this.filteredTags().length} tags`);
 
-        TextInput({ placeholder: 'Search tags', text: this.tagSearchQuery })
-          .onChange((value: string) => {
-            this.tagSearchQuery = value;
-          })
-          .backgroundColor(this.inputBackgroundColor())
-          .fontColor(this.primaryTextColor())
-          .borderRadius(12)
-          .width('100%');
+          TextInput({ placeholder: 'Search tags', text: this.tagSearchQuery })
+            .onChange((value: string) => {
+              this.tagSearchQuery = value;
+            })
+            .backgroundColor(this.inputBackgroundColor())
+            .fontColor(this.primaryTextColor())
+            .borderRadius(12)
+            .width('100%');
 
-        if (this.filteredTags().length === 0) {
-          Text('No tags found.')
-            .fontSize(13)
-            .fontColor(this.secondaryTextColor())
-            .width('100%')
-            .textAlign(TextAlign.Start)
-            .padding({ top: 8, bottom: 8 });
-        } else {
-          ForEach(this.filteredTags(), (tag: string) => {
-            this.TagListRow(tag);
-          }, (tag: string) => `tag-${tag}`);
+          if (this.filteredTags().length === 0) {
+            Text('No tags found.')
+              .fontSize(13)
+              .fontColor(this.secondaryTextColor())
+              .width('100%')
+              .textAlign(TextAlign.Start)
+              .padding({ top: 8, bottom: 8 });
+          } else {
+            ForEach(this.filteredTags(), (tag: string) => {
+              this.TagListRow(tag);
+            }, (tag: string) => `tag-${tag}`);
+          }
         }
+        .justifyContent(FlexAlign.Start)
+        .alignItems(HorizontalAlign.Start)
+        .width('100%')
+        .padding({ bottom: 96 });
       }
-      .justifyContent(FlexAlign.Start)
-      .alignItems(HorizontalAlign.Start)
       .width('100%')
-      .padding({ bottom: 96 });
+      .height('100%')
+      .scrollBar(BarState.Off);
     }
     .width('100%')
     .height('100%')
-    .scrollBar(BarState.Off);
+    .onStateChange((state: RefreshStatus) => {
+      if (state === RefreshStatus.Refresh) {
+        this.handleLibraryTagsPullRefresh();
+      }
+    });
   }
 
   @Builder
@@ -3900,6 +3938,33 @@ struct Index {
       ]);
     } finally {
       this.dashboardRefreshing = false;
+    }
+  }
+
+  private async handleLibraryLinksPullRefresh(): Promise<void> {
+    this.linksRefreshing = true;
+    try {
+      await this.refreshLinks(true);
+    } finally {
+      this.linksRefreshing = false;
+    }
+  }
+
+  private async handleLibraryCollectionsPullRefresh(): Promise<void> {
+    this.collectionsRefreshing = true;
+    try {
+      await this.refreshDashboard();
+    } finally {
+      this.collectionsRefreshing = false;
+    }
+  }
+
+  private async handleLibraryTagsPullRefresh(): Promise<void> {
+    this.tagsRefreshing = true;
+    try {
+      await this.refreshDashboard();
+    } finally {
+      this.tagsRefreshing = false;
     }
   }
 
