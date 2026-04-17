@@ -23,6 +23,10 @@ local.properties
 localconfig.*
 *.keystore
 
+# 本地签名配置（包含绝对路径和加密密码，必须保留在本地）
+# 新克隆时从 build-profile.template.json5 复制并填入自己的签名材料。
+build-profile.json5
+
 # 日志文件
 *.log
 logs/

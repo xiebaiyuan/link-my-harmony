@@ -5,10 +5,11 @@ import {
   parseSessionState,
   serializeSessionState,
 } from './session-state.mjs';
+import { DEFAULT_INSTANCE_URL } from './query-utils.mjs';
 
 test('createDefaultSessionState returns unauthenticated defaults', () => {
   assert.deepEqual(createDefaultSessionState(), {
-    instance: 'https://link.xiebaiyuan.com:45456',
+    instance: DEFAULT_INSTANCE_URL,
     token: '',
     theme: 'system',
   });

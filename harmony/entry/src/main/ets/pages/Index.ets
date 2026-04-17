@@ -2,7 +2,7 @@ import type common from '@ohos.app.ability.common';
 import { emptyLinkItem, type LinkItem, type CollectionItem, type LinkTag } from '../common/Models';
 import { LinkwardenApi } from '../services/LinkwardenApi';
 import type { DashboardTotals } from '../services/LinkwardenApi';
-import { normalizeInstanceUrl } from '../common/Query';
+import { DEFAULT_INSTANCE_URL, normalizeInstanceUrl } from '../common/Query';
 import {
   createDefaultSessionState,
   normalizeThemeMode,
@@ -29,7 +29,7 @@ interface CollectionPreviewSection {
 @Entry
 @Component
 struct Index {
-  @State instance: string = 'https://link.xiebaiyuan.com:45456';
+  @State instance: string = DEFAULT_INSTANCE_URL;
   @State username: string = '';
   @State password: string = '';
   @State token: string = '';
@@ -75,7 +75,7 @@ struct Index {
   @State notice: string = '';
   @State noticeIsError: boolean = false;
 
-  @State settingsInstance: string = 'https://link.xiebaiyuan.com:45456';
+  @State settingsInstance: string = DEFAULT_INSTANCE_URL;
 
   @State selectedLink: LinkItem = emptyLinkItem();
   @State detailLoading: boolean = false;
@@ -105,7 +105,7 @@ struct Index {
   @StorageLink('safeAreaTop') safeAreaTop: number = 44;
   @StorageLink('deviceDarkMode') deviceDarkMode: boolean = false;
 
-  private api: LinkwardenApi = new LinkwardenApi('https://link.xiebaiyuan.com:45456', '');
+  private api: LinkwardenApi = new LinkwardenApi(DEFAULT_INSTANCE_URL, '');
   private storage: SessionStorage | null = null;
   private hasRestoredSession: boolean = false;
   private sharePollTimer: number = -1;

@@ -1,7 +1,9 @@
+export const DEFAULT_INSTANCE_URL = 'https://cloud.linkwarden.app';
+
 export function normalizeInstanceUrl(input) {
   const trimmed = String(input ?? '').trim();
   if (trimmed.length === 0) {
-    return 'https://link.xiebaiyuan.com:45456';
+    return DEFAULT_INSTANCE_URL;
   }
 
   const withScheme = /^https?:\/\//i.test(trimmed)

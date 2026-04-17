@@ -1,0 +1,62 @@
+{
+  // Copy this file to `harmony/build-profile.json5` and fill in your own
+  // signing material. The real `harmony/build-profile.json5` is listed in
+  // `.gitignore` so your private paths and passwords never reach the
+  // repository.
+  //
+  // Recommended flow (DevEco Studio):
+  //   1. File > Project Structure > Signing Configs > "Automatically generate
+  //      signing" — this creates a debug cert/profile set under
+  //      `~/.ohos/config/` and fills in the four `material` fields below.
+  //   2. Quit DevEco, copy the generated block into this template, then save
+  //      it as `build-profile.json5`.
+  //
+  // Or, for a manual / AppGallery Connect release cert:
+  //   - certpath:   absolute path to your .cer
+  //   - profile:    absolute path to your .p7b provisioning profile
+  //   - storeFile:  absolute path to your .p12 keystore
+  //   - storePassword / keyPassword: the DevEco-encrypted strings
+  //   - keyAlias:   matches the alias chosen when the cert was generated
+  "app": {
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "/absolute/path/to/debug.cer",
+          "storeFile": "/absolute/path/to/debug.p12",
+          "storePassword": "<deveco-encrypted-store-password>",
+          "keyAlias": "debugKey",
+          "keyPassword": "<deveco-encrypted-key-password>",
+          "profile": "/absolute/path/to/debug.p7b",
+          "signAlg": "SHA256withECDSA"
+        }
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default",
+        "compatibleSdkVersion": "6.0.0(20)",
+        "targetSdkVersion": "6.0.0(20)",
+        "runtimeOS": "HarmonyOS"
+      }
+    ],
+    "buildModeSet": [
+      { "name": "debug" },
+      { "name": "release" }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": ["default"]
+        }
+      ]
+    }
+  ]
+}

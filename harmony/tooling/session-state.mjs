@@ -1,6 +1,8 @@
+import { DEFAULT_INSTANCE_URL } from './query-utils.mjs';
+
 export function createDefaultSessionState() {
   return {
-    instance: 'https://link.xiebaiyuan.com:45456',
+    instance: DEFAULT_INSTANCE_URL,
     token: '',
     theme: 'system',
   };
@@ -16,7 +18,7 @@ export function serializeSessionState(state) {
   return JSON.stringify({
     instance: typeof state?.instance === 'string' && state.instance.length > 0
       ? state.instance
-      : 'https://link.xiebaiyuan.com:45456',
+      : DEFAULT_INSTANCE_URL,
     token: typeof state?.token === 'string' ? state.token : '',
     theme: normalizeTheme(state?.theme),
   });
