@@ -8,6 +8,7 @@ An **unofficial, third‑party HarmonyOS Next client for [Linkwarden](https://gi
   <img alt="Platform" src="https://img.shields.io/badge/platform-HarmonyOS%20Next-1F6FEB">
   <img alt="Language" src="https://img.shields.io/badge/lang-ArkTS-3178C6">
   <img alt="Upstream" src="https://img.shields.io/badge/upstream-Linkwarden-0F172A">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
   <img alt="Status" src="https://img.shields.io/badge/status-early%20MVP-orange">
 </p>
 
@@ -160,7 +161,9 @@ Bug reports and PRs are welcome — but please:
 
 ## License
 
-Not yet chosen. Until a `LICENSE` file is added, this repository is offered **source‑available for personal evaluation**; no rights are granted beyond viewing and building locally. A permissive license (MIT / Apache‑2.0) or AGPL‑3.0 (to match upstream) will be added before any wider distribution.
+Released under the [MIT License](./LICENSE).
+
+This repository does **not** incorporate any source code from the upstream Linkwarden server — it is a standalone client that talks to a Linkwarden instance over its public HTTP API. Linkwarden itself is licensed under AGPL‑3.0; its name, logo, and server source remain the property of the [Linkwarden project](https://github.com/linkwarden/linkwarden) and its contributors.
 
 ## Acknowledgements
 
