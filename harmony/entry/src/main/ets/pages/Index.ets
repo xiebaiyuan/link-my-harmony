@@ -10,6 +10,15 @@ import {
 } from '../common/SessionState';
 import { createQuickMenuActions, createThemeOptions, createThemePalette, shouldReturnToDashboard, type MainView, type QuickMenuAction, type ThemeOption } from '../common/UiDesign';
 import { SessionStorage } from '../services/SessionStorage';
+import { CollectionUsageStorage } from '../services/CollectionUsageStorage';
+import {
+  collectionUsageScore,
+  createDefaultCollectionUsage,
+  findCollectionUsageEntry,
+  recordCollectionView,
+  type CollectionUsageEntry,
+  type CollectionUsageState,
+} from '../common/CollectionUsage';
 import { consumePendingSharedIntent } from '../common/ShareIntent';
 
 type ElementsView = 'links' | 'collections' | 'tags';
@@ -24,6 +33,12 @@ interface ParsedLinkInput {
 interface CollectionPreviewSection {
   collection: CollectionItem;
   links: Array<LinkItem>;
+}
+
+interface ScoredCollectionPreview {
+  section: CollectionPreviewSection;
+  order: number;
+  score: number;
 }
 
 @Entry
@@ -105,11 +120,13 @@ struct Index {
   @State collectionSaving: boolean = false;
   @State pinSaving: boolean = false;
   @State quickMenuOpen: boolean = false;
+  @State collectionUsage: CollectionUsageState = createDefaultCollectionUsage();
   @StorageLink('safeAreaTop') safeAreaTop: number = 44;
   @StorageLink('deviceDarkMode') deviceDarkMode: boolean = false;
 
   private api: LinkwardenApi = new LinkwardenApi(DEFAULT_INSTANCE_URL, '');
   private storage: SessionStorage | null = null;
+  private usageStorage: CollectionUsageStorage | null = null;
   private hasRestoredSession: boolean = false;
   private sharePollTimer: number = -1;
   private noticeTimer: number = -1;
@@ -124,6 +141,7 @@ struct Index {
     this.hasRestoredSession = true;
     this.startSharePolling();
     this.storage = new SessionStorage(getContext(this));
+    this.usageStorage = new CollectionUsageStorage(getContext(this));
     this.restoreSession();
   }
 
@@ -1485,6 +1503,7 @@ struct Index {
     .width('100%')
     .onClick(() => {
       this.highlightedLinkId = 0;
+      this.recordCollectionViewUsage(item.collectionId);
       this.openLinkInBrowser(item.url);
     })
     .gesture(
@@ -1541,6 +1560,7 @@ struct Index {
     .alignItems(HorizontalAlign.Start)
     .onClick(() => {
       this.highlightedLinkId = 0;
+      this.recordCollectionViewUsage(item.collectionId);
       this.openLinkInBrowser(item.url);
     })
     .gesture(
@@ -3185,11 +3205,31 @@ struct Index {
   }
 
   private navigateToCollection(collectionId: number): void {
+    this.recordCollectionViewUsage(collectionId);
     this.mainView = 'elements';
     this.elementsView = 'links';
     this.selectedCollectionFilterId = collectionId;
     this.showPinnedOnly = false;
     this.refreshLinks(true);
+  }
+
+  private recordCollectionViewUsage(collectionId: number): void {
+    if (collectionId <= 0) {
+      return;
+    }
+    this.collectionUsage = recordCollectionView(this.collectionUsage, collectionId, Date.now());
+    this.persistCollectionUsage();
+  }
+
+  private async persistCollectionUsage(): Promise<void> {
+    if (this.usageStorage === null) {
+      this.usageStorage = new CollectionUsageStorage(getContext(this));
+    }
+    try {
+      await this.usageStorage.save(this.collectionUsage);
+    } catch (error) {
+      console.warn(`persist collection usage failed: ${this.formatError(error)}`);
+    }
   }
 
   private navigateToAllLinks(): void {
@@ -3278,12 +3318,34 @@ struct Index {
       }
     });
 
+    const now: number = Date.now();
+    const usage: CollectionUsageState = this.collectionUsage;
+    const ranked: Array<ScoredCollectionPreview> = [];
+    for (let i: number = 0; i < grouped.length; i++) {
+      const section: CollectionPreviewSection = grouped[i];
+      const entry: CollectionUsageEntry | null = findCollectionUsageEntry(usage, section.collection.id);
+      ranked.push({
+        section,
+        order: i,
+        score: collectionUsageScore(entry, now),
+      });
+    }
+    ranked.sort((a: ScoredCollectionPreview, b: ScoredCollectionPreview) => {
+      if (a.score !== b.score) {
+        return b.score - a.score;
+      }
+      return a.order - b.order;
+    });
+    const sorted: Array<CollectionPreviewSection> = ranked.map(
+      (item: ScoredCollectionPreview) => item.section,
+    );
+
     const unorganizedLinks = this.homePreviewLinks
       .filter((item: LinkItem) => item.collectionId === 0)
       .slice(0, 10);
 
     if (unorganizedLinks.length > 0) {
-      grouped.push({
+      sorted.push({
         collection: {
           id: 0,
           ownerId: 0,
@@ -3298,7 +3360,7 @@ struct Index {
       });
     }
 
-    return grouped;
+    return sorted;
   }
 
   private extractUrlAndTitleFromInput(rawInput: string): ParsedLinkInput {
@@ -3495,6 +3557,15 @@ struct Index {
       this.currentUserId = 0;
       this.themeMode = normalizeThemeMode(state.theme);
       this.syncApiContext();
+
+      if (this.usageStorage === null) {
+        this.usageStorage = new CollectionUsageStorage(getContext(this));
+      }
+      try {
+        this.collectionUsage = await this.usageStorage.load();
+      } catch (usageError) {
+        this.collectionUsage = createDefaultCollectionUsage();
+      }
 
       if (this.token.length > 0) {
         await this.ensureCurrentUserId();
