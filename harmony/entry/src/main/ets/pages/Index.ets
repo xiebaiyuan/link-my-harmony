@@ -1,13 +1,22 @@
 import type common from '@ohos.app.ability.common';
+import pasteboard from '@ohos.pasteboard';
+import picker from '@ohos.file.picker';
+import fs from '@ohos.file.fs';
+import util from '@ohos.util';
 import { emptyLinkItem, type LinkItem, type CollectionItem, type LinkTag } from '../common/Models';
-import { LinkwardenApi } from '../services/LinkwardenApi';
 import type { DashboardTotals } from '../services/LinkwardenApi';
+import { BookmarkService } from '../services/BookmarkService';
+import { MergeRunner } from '../services/MergeRunner';
+import type { MergeProgress, MergeSummary } from '../services/MergeRunner';
 import { DEFAULT_INSTANCE_URL, normalizeInstanceUrl } from '../common/Query';
 import {
   createDefaultSessionState,
   normalizeThemeMode,
+  type SessionMode,
   type ThemeMode,
 } from '../common/SessionState';
+import { parseBackupEnvelope } from '../services/LocalDatabase';
+import type { ImportStrategy, ImportSummary, BackupEnvelope } from '../common/LocalStore';
 import { createQuickMenuActions, createThemeOptions, createThemePalette, shouldReturnToDashboard, type MainView, type QuickMenuAction, type ThemeOption } from '../common/UiDesign';
 import { SessionStorage } from '../services/SessionStorage';
 import { CollectionUsageStorage } from '../services/CollectionUsageStorage';
@@ -50,6 +59,7 @@ struct Index {
   @State token: string = '';
   @State currentUserId: number = 0;
   @State themeMode: ThemeMode = 'system';
+  @State sessionMode: SessionMode = 'online';
 
   @State searchQuery: string = '';
   @State newLinkUrl: string = '';
@@ -121,10 +131,28 @@ struct Index {
   @State pinSaving: boolean = false;
   @State quickMenuOpen: boolean = false;
   @State collectionUsage: CollectionUsageState = createDefaultCollectionUsage();
+  @State localSyncRunning: boolean = false;
+  @State lastMergeSummary: string = '';
+  @State lastMergeHasResult: boolean = false;
+  @State syncProgressText: string = '';
+  @State importPayload: string = '';
+  @State exportingLocal: boolean = false;
+  @State importingLocal: boolean = false;
+  @State clearingLocal: boolean = false;
+  @State localLinkCount: number = 0;
+  @State localCollectionCount: number = 0;
+  @State previewRaw: string = '';
+  @State previewLinkCount: number = 0;
+  @State previewCollectionCount: number = 0;
+  @State previewTagCount: number = 0;
+  @State previewExportedAt: string = '';
+  @State previewStrategy: ImportStrategy = 'merge';
+  @State previewSource: string = '';
+  @State previewVisible: boolean = false;
   @StorageLink('safeAreaTop') safeAreaTop: number = 44;
   @StorageLink('deviceDarkMode') deviceDarkMode: boolean = false;
 
-  private api: LinkwardenApi = new LinkwardenApi(DEFAULT_INSTANCE_URL, '');
+  private service: BookmarkService = new BookmarkService(DEFAULT_INSTANCE_URL, '', 'online');
   private storage: SessionStorage | null = null;
   private usageStorage: CollectionUsageStorage | null = null;
   private hasRestoredSession: boolean = false;
@@ -183,7 +211,7 @@ struct Index {
           .layoutWeight(1)
           .width('100%')
           .padding({ left: 12, right: 12, top: 20, bottom: 24 });
-        } else if (this.token.length === 0) {
+        } else if (this.token.length === 0 && this.sessionMode !== 'offline') {
           Scroll() {
             Column({ space: 12 }) {
               this.LoginPanel();
@@ -203,7 +231,7 @@ struct Index {
       .height('100%')
       .backgroundColor(this.pageColor());
 
-      if (!this.restoring && this.token.length > 0) {
+      if (!this.restoring && (this.token.length > 0 || this.sessionMode === 'offline')) {
         Column() {
           Column({ space: 6 }) {
             if (this.mainView === 'dashboard') {
@@ -294,6 +322,23 @@ struct Index {
         .onClick(() => {
           this.handleSignIn();
         });
+
+      Button('Use offline (local only)')
+        .backgroundColor(Color.Transparent)
+        .fontColor(this.primaryTextColor())
+        .borderColor(this.inputBackgroundColor())
+        .borderWidth(1)
+        .borderRadius(12)
+        .width('100%')
+        .onClick(() => {
+          this.handleEnterOfflineMode();
+        });
+
+      Text('Offline mode keeps everything on this device. You can sync it to Linkwarden later.')
+        .fontSize(12)
+        .fontColor(this.secondaryTextColor())
+        .width('100%')
+        .textAlign(TextAlign.Start);
     }
     .padding(12)
     .backgroundColor(this.cardColor())
@@ -2304,6 +2349,289 @@ struct Index {
         .width('100%');
 
         Column({ space: 10 }) {
+          Text('Local data')
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.primaryTextColor())
+            .width('100%')
+            .textAlign(TextAlign.Start);
+
+          Text(`Stored on this device: ${this.localLinkCount} links, ${this.localCollectionCount} collections. Back up regularly — data is kept in the app sandbox and will be lost if you uninstall.`)
+            .fontSize(12)
+            .fontColor(this.secondaryTextColor())
+            .width('100%')
+            .textAlign(TextAlign.Start);
+
+          Row({ space: 8 }) {
+            Button(this.exportingLocal ? 'Exporting…' : 'Copy to clipboard')
+              .enabled(!this.exportingLocal)
+              .layoutWeight(1)
+              .height(44)
+              .backgroundColor(this.themePalette().accentSoft)
+              .fontColor(this.accentColor())
+              .borderRadius(14)
+              .border({ width: 1, color: this.accentColor() })
+              .onClick(() => {
+                this.handleExportLocal();
+              });
+
+            Button(this.exportingLocal ? 'Saving…' : 'Save to file…')
+              .enabled(!this.exportingLocal)
+              .layoutWeight(1)
+              .height(44)
+              .backgroundColor(this.themePalette().accentSoft)
+              .fontColor(this.accentColor())
+              .borderRadius(14)
+              .border({ width: 1, color: this.accentColor() })
+              .onClick(() => {
+                this.handleExportToFile();
+              });
+          }
+          .width('100%');
+
+          Text('Paste a folio-backup JSON below, or load one from a file.')
+            .fontSize(12)
+            .fontColor(this.secondaryTextColor())
+            .width('100%')
+            .textAlign(TextAlign.Start);
+
+          Row({ space: 8 }) {
+            Button(this.importingLocal ? 'Merging…' : 'Import from file (merge)')
+              .enabled(!this.importingLocal)
+              .layoutWeight(1)
+              .height(44)
+              .backgroundColor(this.themePalette().accentSoft)
+              .fontColor(this.accentColor())
+              .borderRadius(14)
+              .border({ width: 1, color: this.accentColor() })
+              .onClick(() => {
+                this.handleImportFromFile('merge');
+              });
+
+            Button(this.importingLocal ? 'Replacing…' : 'Import from file (replace)')
+              .enabled(!this.importingLocal)
+              .layoutWeight(1)
+              .height(44)
+              .backgroundColor('transparent')
+              .fontColor(this.dangerColor())
+              .borderRadius(14)
+              .border({ width: 1, color: this.dangerColor() })
+              .onClick(() => {
+                this.handleImportFromFile('replace');
+              });
+          }
+          .width('100%');
+
+          TextArea({ placeholder: '{"format":"folio-backup",...}', text: this.importPayload })
+            .onChange((value: string) => {
+              this.importPayload = value;
+            })
+            .backgroundColor(this.inputBackgroundColor())
+            .fontColor(this.primaryTextColor())
+            .borderRadius(12)
+            .width('100%')
+            .height(120);
+
+          Row({ space: 8 }) {
+            Button(this.importingLocal ? 'Merging…' : 'Paste import (merge)')
+              .enabled(!this.importingLocal)
+              .layoutWeight(1)
+              .height(44)
+              .backgroundColor('transparent')
+              .fontColor(this.primaryTextColor())
+              .borderRadius(14)
+              .border({ width: 1, color: this.panelBorderColor() })
+              .onClick(() => {
+                this.handleImportLocal('merge');
+              });
+
+            Button(this.importingLocal ? 'Replacing…' : 'Paste import (replace)')
+              .enabled(!this.importingLocal)
+              .layoutWeight(1)
+              .height(44)
+              .backgroundColor('transparent')
+              .fontColor(this.dangerColor())
+              .borderRadius(14)
+              .border({ width: 1, color: this.dangerColor() })
+              .onClick(() => {
+                this.handleImportLocal('replace');
+              });
+          }
+          .width('100%');
+
+          Button(this.clearingLocal ? 'Clearing…' : 'Clear local data')
+            .enabled(!this.clearingLocal && this.localLinkCount + this.localCollectionCount > 0)
+            .width('100%')
+            .height(44)
+            .backgroundColor('transparent')
+            .fontColor(this.dangerColor())
+            .borderRadius(14)
+            .border({ width: 1, color: this.dangerColor() })
+            .onClick(() => {
+              this.handleClearLocal();
+            });
+        }
+        .padding(18)
+        .backgroundColor(this.cardColor())
+        .borderRadius(18)
+        .border({ width: 1, color: this.panelBorderColor() })
+        .width('100%');
+
+        if (this.previewVisible) {
+          Column({ space: 10 }) {
+            Text('Import preview')
+              .fontSize(14)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.primaryTextColor())
+              .width('100%')
+              .textAlign(TextAlign.Start);
+
+            Text(`This backup contains ${this.previewLinkCount} links, ${this.previewCollectionCount} collections, ${this.previewTagCount} tags.`)
+              .fontSize(12)
+              .fontColor(this.primaryTextColor())
+              .width('100%')
+              .textAlign(TextAlign.Start);
+
+            Text(this.previewExportedAt.length > 0
+              ? `Exported ${this.previewExportedAt}`
+              : 'Exported date not recorded.')
+              .fontSize(12)
+              .fontColor(this.secondaryTextColor())
+              .width('100%')
+              .textAlign(TextAlign.Start);
+
+            Text(this.previewStrategy === 'replace'
+              ? 'Strategy: REPLACE — all current local data will be wiped before loading this backup.'
+              : 'Strategy: MERGE — existing rows are kept; duplicates (by name for collections, by URL + collection for links) are skipped.')
+              .fontSize(12)
+              .fontColor(this.previewStrategy === 'replace' ? this.dangerColor() : this.primaryTextColor())
+              .width('100%')
+              .textAlign(TextAlign.Start);
+
+            Text(`Source: ${this.previewSource === 'file' ? 'picked file' : 'pasted text'}. Review the numbers before confirming.`)
+              .fontSize(12)
+              .fontColor(this.secondaryTextColor())
+              .width('100%')
+              .textAlign(TextAlign.Start);
+
+            Row({ space: 8 }) {
+              Button(this.importingLocal ? 'Importing…' : 'Confirm import')
+                .enabled(!this.importingLocal)
+                .layoutWeight(1)
+                .height(44)
+                .backgroundColor(this.previewStrategy === 'replace' ? 'transparent' : this.themePalette().accentSoft)
+                .fontColor(this.previewStrategy === 'replace' ? this.dangerColor() : this.accentColor())
+                .borderRadius(14)
+                .border({ width: 1, color: this.previewStrategy === 'replace' ? this.dangerColor() : this.accentColor() })
+                .onClick(() => {
+                  this.handleConfirmPreview();
+                });
+
+              Button('Cancel')
+                .enabled(!this.importingLocal)
+                .layoutWeight(1)
+                .height(44)
+                .backgroundColor('transparent')
+                .fontColor(this.primaryTextColor())
+                .borderRadius(14)
+                .border({ width: 1, color: this.panelBorderColor() })
+                .onClick(() => {
+                  this.handleCancelPreview();
+                });
+            }
+            .width('100%');
+          }
+          .padding(18)
+          .backgroundColor(this.cardColor())
+          .borderRadius(18)
+          .border({ width: 1, color: this.accentColor() })
+          .width('100%');
+        }
+
+        if (this.sessionMode === 'online' && this.token.length > 0
+            && (this.localLinkCount + this.localCollectionCount) > 0) {
+          Column({ space: 10 }) {
+            Text('Sync local → Linkwarden')
+              .fontSize(14)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.primaryTextColor())
+              .width('100%')
+              .textAlign(TextAlign.Start);
+
+            Text(`${this.localLinkCount} local bookmarks and ${this.localCollectionCount} collections are not on the server yet. Upload them once. Duplicates (same URL + collection) are skipped.`)
+              .fontSize(12)
+              .fontColor(this.secondaryTextColor())
+              .width('100%')
+              .textAlign(TextAlign.Start);
+
+            Button(this.localSyncRunning ? 'Syncing…' : `Upload ${this.localLinkCount} bookmarks to ${this.instance}`)
+              .enabled(!this.localSyncRunning)
+              .width('100%')
+              .height(44)
+              .backgroundColor(this.themePalette().accentSoft)
+              .fontColor(this.accentColor())
+              .borderRadius(14)
+              .border({ width: 1, color: this.accentColor() })
+              .onClick(() => {
+                this.handleSyncLocalToServer();
+              });
+
+            if (this.localSyncRunning && this.syncProgressText.length > 0) {
+              Text(this.syncProgressText)
+                .fontSize(12)
+                .fontColor(this.secondaryTextColor())
+                .width('100%')
+                .textAlign(TextAlign.Start);
+            }
+
+            if (this.lastMergeHasResult) {
+              Text(this.lastMergeSummary)
+                .fontSize(12)
+                .fontColor(this.primaryTextColor())
+                .width('100%')
+                .textAlign(TextAlign.Start);
+
+              Text('Keep the local copy as archive (switch to offline mode to view), or clear it now?')
+                .fontSize(12)
+                .fontColor(this.secondaryTextColor())
+                .width('100%')
+                .textAlign(TextAlign.Start);
+
+              Row({ space: 8 }) {
+                Button('Keep as archive')
+                  .layoutWeight(1)
+                  .height(44)
+                  .backgroundColor(this.themePalette().accentSoft)
+                  .fontColor(this.accentColor())
+                  .borderRadius(14)
+                  .border({ width: 1, color: this.accentColor() })
+                  .onClick(() => {
+                    this.handleMergeArchiveKeep();
+                  });
+
+                Button(this.clearingLocal ? 'Clearing…' : 'Clear local')
+                  .enabled(!this.clearingLocal)
+                  .layoutWeight(1)
+                  .height(44)
+                  .backgroundColor('transparent')
+                  .fontColor(this.dangerColor())
+                  .borderRadius(14)
+                  .border({ width: 1, color: this.dangerColor() })
+                  .onClick(() => {
+                    this.handleMergeArchiveClear();
+                  });
+              }
+              .width('100%');
+            }
+          }
+          .padding(18)
+          .backgroundColor(this.cardColor())
+          .borderRadius(18)
+          .border({ width: 1, color: this.panelBorderColor() })
+          .width('100%');
+        }
+
+        Column({ space: 10 }) {
           Text('Quick Links')
             .fontSize(14)
             .fontWeight(FontWeight.Medium)
@@ -2335,22 +2663,67 @@ struct Index {
             .width('100%')
             .textAlign(TextAlign.Start);
 
-          Text('Sign out from current Linkwarden account on this device.')
-            .fontSize(12)
-            .fontColor(this.secondaryTextColor())
-            .width('100%')
-            .textAlign(TextAlign.Start);
+          if (this.sessionMode === 'offline') {
+            Text('Not connected to a Linkwarden server. Sign in to keep bookmarks in sync across devices.')
+              .fontSize(12)
+              .fontColor(this.secondaryTextColor())
+              .width('100%')
+              .textAlign(TextAlign.Start);
 
-          Button('Sign Out')
-            .width('100%')
-            .height(44)
-            .backgroundColor('transparent')
-            .fontColor(this.dangerColor())
-            .borderRadius(14)
-            .border({ width: 1, color: this.dangerColor() })
-            .onClick(() => {
-              this.handleSignOut();
-            });
+            if (this.token.length > 0) {
+              Button(this.loading ? 'Resuming…' : 'Resume online mode')
+                .enabled(!this.loading)
+                .width('100%')
+                .height(44)
+                .backgroundColor(this.themePalette().accentSoft)
+                .fontColor(this.accentColor())
+                .borderRadius(14)
+                .border({ width: 1, color: this.accentColor() })
+                .onClick(() => {
+                  this.handleResumeOnline();
+                });
+            } else {
+              Button('Connect to Linkwarden')
+                .width('100%')
+                .height(44)
+                .backgroundColor(this.themePalette().accentSoft)
+                .fontColor(this.accentColor())
+                .borderRadius(14)
+                .border({ width: 1, color: this.accentColor() })
+                .onClick(() => {
+                  this.handleConnectToLinkwarden();
+                });
+            }
+          } else {
+            Text('Signed in to Linkwarden. Switch to offline mode to keep working on this device without the server.')
+              .fontSize(12)
+              .fontColor(this.secondaryTextColor())
+              .width('100%')
+              .textAlign(TextAlign.Start);
+
+            Button(this.loading ? 'Switching…' : 'Switch to offline (keep signed in)')
+              .enabled(!this.loading)
+              .width('100%')
+              .height(44)
+              .backgroundColor('transparent')
+              .fontColor(this.primaryTextColor())
+              .borderRadius(14)
+              .border({ width: 1, color: this.panelBorderColor() })
+              .onClick(() => {
+                this.handleSwitchToOffline();
+              });
+
+            Button('Sign Out')
+              .width('100%')
+              .height(44)
+              .backgroundColor('transparent')
+              .fontColor(this.dangerColor())
+              .borderRadius(14)
+              .border({ width: 1, color: this.dangerColor() })
+              .onClick(() => {
+                this.handleSignOut();
+              });
+          }
         }
         .padding(18)
         .backgroundColor(this.cardColor())
@@ -2801,6 +3174,7 @@ struct Index {
 
     this.mainView = 'settings';
     this.settingsInstance = this.instance;
+    this.refreshLocalCounts();
   }
 
   private mainViewTitle(): string {
@@ -3508,8 +3882,9 @@ struct Index {
 
   private syncApiContext(): void {
     this.instance = normalizeInstanceUrl(this.instance);
-    this.api.setInstance(this.instance);
-    this.api.setToken(this.token);
+    this.service.setInstance(this.instance);
+    this.service.setToken(this.token);
+    this.service.setMode(this.sessionMode);
     this.settingsInstance = this.instance;
   }
 
@@ -3534,12 +3909,16 @@ struct Index {
   }
 
   private async ensureCurrentUserId(): Promise<void> {
+    if (this.sessionMode === 'offline') {
+      this.currentUserId = 0;
+      return;
+    }
     if (this.currentUserId > 0) {
       return;
     }
 
     this.syncApiContext();
-    this.currentUserId = await this.api.fetchCurrentUserId();
+    this.currentUserId = await this.service.fetchCurrentUserId();
   }
 
   private async restoreSession(): Promise<void> {
@@ -3550,12 +3929,15 @@ struct Index {
         this.storage = new SessionStorage(getContext(this));
       }
 
+      await this.service.attachContext(getContext(this));
+
       const state = await this.storage.load();
       this.instance = normalizeInstanceUrl(state.instance);
       this.settingsInstance = this.instance;
       this.token = state.token;
       this.currentUserId = 0;
       this.themeMode = normalizeThemeMode(state.theme);
+      this.sessionMode = state.mode;
       this.syncApiContext();
 
       if (this.usageStorage === null) {
@@ -3567,7 +3949,13 @@ struct Index {
         this.collectionUsage = createDefaultCollectionUsage();
       }
 
-      if (this.token.length > 0) {
+      if (this.sessionMode === 'offline') {
+        await Promise.all([this.refreshLinks(true), this.refreshDashboard()]);
+        await this.consumeSharedUrlAndMaybeSave();
+        if (this.notice.length === 0) {
+          this.setNotice('Offline mode — data stays on this device.', false);
+        }
+      } else if (this.token.length > 0) {
         await this.ensureCurrentUserId();
         await Promise.all([this.refreshLinks(true), this.refreshDashboard()]);
         await this.consumeSharedUrlAndMaybeSave();
@@ -3576,12 +3964,15 @@ struct Index {
           this.setNotice('Session restored.', false);
         }
       }
+
+      await this.refreshLocalCounts();
     } catch (error) {
       this.instance = fallback.instance;
       this.settingsInstance = fallback.instance;
       this.token = fallback.token;
       this.currentUserId = 0;
       this.themeMode = fallback.theme;
+      this.sessionMode = fallback.mode;
       this.setNotice(`Restore failed: ${this.formatError(error)}`, true);
     } finally {
       this.restoring = false;
@@ -3597,6 +3988,7 @@ struct Index {
       instance: normalizeInstanceUrl(this.instance),
       token: this.token,
       theme: this.themeMode,
+      mode: this.sessionMode,
     });
   }
 
@@ -3664,7 +4056,7 @@ struct Index {
     this.instance = nextInstance;
     this.syncApiContext();
 
-    if (changedServer) {
+    if (changedServer && this.sessionMode !== 'offline') {
       this.token = '';
       this.currentUserId = 0;
       this.links = [];
@@ -3709,20 +4101,447 @@ struct Index {
     this.loading = true;
     this.setNotice('', false);
 
+    const previousMode: SessionMode = this.sessionMode;
+
     try {
+      this.sessionMode = 'online';
       this.syncApiContext();
-      const token = await this.api.signIn(this.username.trim(), this.password);
+      const token = await this.service.signIn(this.username.trim(), this.password);
       this.token = token;
       this.syncApiContext();
-      this.currentUserId = await this.api.fetchCurrentUserId();
+      this.currentUserId = await this.service.fetchCurrentUserId();
+      await this.persistSessionState();
+
+      // Always check for local data after sign-in. The user may have seeded
+      // their device via offline mode OR imported a backup earlier.
+      await this.maybeOfferLocalSync();
+
+      await Promise.all([this.refreshLinks(true), this.refreshDashboard()]);
+      await this.consumeSharedUrlAndMaybeSave();
+      if (this.notice.length === 0) {
+        this.setNotice('Signed in successfully.', false);
+      }
+    } catch (error) {
+      // If sign-in failed and we came from offline mode, bounce back so
+      // the user does not lose access to their local data.
+      if (previousMode === 'offline') {
+        this.sessionMode = 'offline';
+        this.token = '';
+        this.syncApiContext();
+      }
+      const message: string = this.formatError(error);
+      const looksNetworky: boolean = /REQUEST_|HTTP_5|timeout|network|ECONNREFUSED|EHOSTUNREACH|ENOTFOUND/i.test(message);
+      if (looksNetworky) {
+        this.setNotice(
+          `Sign in failed: ${message}. If the server is unreachable, tap "Use offline" to keep working on this device.`,
+          true,
+        );
+      } else {
+        this.setNotice(`Sign in failed: ${message}`, true);
+      }
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  private async handleEnterOfflineMode(): Promise<void> {
+    if (this.loading) {
+      return;
+    }
+    this.loading = true;
+    this.setNotice('', false);
+    try {
+      this.sessionMode = 'offline';
+      this.token = '';
+      this.currentUserId = 0;
+      this.username = '';
+      this.password = '';
+      this.syncApiContext();
       await this.persistSessionState();
       await Promise.all([this.refreshLinks(true), this.refreshDashboard()]);
       await this.consumeSharedUrlAndMaybeSave();
-      this.setNotice('Signed in successfully.', false);
+      this.setNotice('Offline mode — changes stay on this device.', false);
     } catch (error) {
-      this.setNotice(`Sign in failed: ${this.formatError(error)}`, true);
+      this.setNotice(`Enter offline failed: ${this.formatError(error)}`, true);
     } finally {
       this.loading = false;
+    }
+  }
+
+  private async maybeOfferLocalSync(): Promise<void> {
+    try {
+      const hasLocal: boolean = await this.service.hasLocalData();
+      if (!hasLocal) {
+        return;
+      }
+      const count: number = await this.service.countLocalLinks();
+      this.setNotice(
+        `${count} local bookmarks detected. Open Settings → Local data to sync them to the server.`,
+        false,
+      );
+    } catch (error) {
+      console.warn(`maybeOfferLocalSync: ${this.formatError(error)}`);
+    }
+  }
+
+  private async refreshLocalCounts(): Promise<void> {
+    try {
+      const count: number = await this.service.countLocalLinks();
+      this.localLinkCount = count;
+      const cols: Array<CollectionItem> = await this.service.localDatabase().listCollections();
+      this.localCollectionCount = cols.length;
+    } catch (error) {
+      // Swallow — counts are best-effort UI helpers, not critical.
+      console.warn(`refreshLocalCounts: ${this.formatError(error)}`);
+    }
+  }
+
+  private async handleExportLocal(): Promise<void> {
+    if (this.exportingLocal) {
+      return;
+    }
+    this.exportingLocal = true;
+    try {
+      const raw: string = await this.service.exportLocal();
+      const board = pasteboard.getSystemPasteboard();
+      const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, raw);
+      await board.setData(data);
+      this.setNotice(`Backup copied to clipboard (${raw.length} chars). Save it somewhere safe.`, false);
+    } catch (error) {
+      this.setNotice(`Export failed: ${this.formatError(error)}`, true);
+    } finally {
+      this.exportingLocal = false;
+    }
+  }
+
+  private async handleExportToFile(): Promise<void> {
+    if (this.exportingLocal) {
+      return;
+    }
+    this.exportingLocal = true;
+    try {
+      const raw: string = await this.service.exportLocal();
+      const stamp: string = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const suggestedName: string = `folio-backup-${stamp}.json`;
+      const saveOptions: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
+      saveOptions.newFileNames = [suggestedName];
+      const documentPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker();
+      const uris: Array<string> = await documentPicker.save(saveOptions);
+      if (!Array.isArray(uris) || uris.length === 0) {
+        this.setNotice('Export cancelled.', false);
+        return;
+      }
+      const uri: string = uris[0];
+      await this.writeFileSafe(uri, raw);
+      this.setNotice(`Backup saved: ${uri}`, false);
+    } catch (error) {
+      this.setNotice(`Export failed: ${this.formatError(error)}`, true);
+    } finally {
+      this.exportingLocal = false;
+    }
+  }
+
+  /**
+   * Write a UTF-8 string to a file. Tries the fast path (direct string
+   * write) first; falls back to encoding into an ArrayBuffer if the SDK
+   * on this device rejects string content.
+   */
+  private async writeFileSafe(uri: string, content: string): Promise<void> {
+    const file = fs.openSync(uri, fs.OpenMode.READ_WRITE | fs.OpenMode.TRUNC);
+    try {
+      try {
+        fs.writeSync(file.fd, content);
+      } catch (stringWriteError) {
+        const encoder = new util.TextEncoder();
+        const bytes: Uint8Array = encoder.encodeInto(content);
+        fs.writeSync(file.fd, bytes.buffer);
+      }
+    } finally {
+      fs.closeSync(file);
+    }
+  }
+
+  /**
+   * Read a file as a UTF-8 string. Tries `fs.readTextSync` first; if that
+   * API is unavailable on this SDK, falls back to open + stat + read +
+   * TextDecoder.
+   */
+  private async readFileSafe(uri: string): Promise<string> {
+    try {
+      return fs.readTextSync(uri);
+    } catch (readTextError) {
+      const file = fs.openSync(uri, fs.OpenMode.READ_ONLY);
+      try {
+        const stat = fs.statSync(file.fd);
+        const size: number = stat.size;
+        const buffer: ArrayBuffer = new ArrayBuffer(size);
+        fs.readSync(file.fd, buffer);
+        const decoder = util.TextDecoder.create('utf-8');
+        return decoder.decodeToString(new Uint8Array(buffer));
+      } finally {
+        fs.closeSync(file);
+      }
+    }
+  }
+
+  private async handleImportFromFile(strategy: ImportStrategy): Promise<void> {
+    if (this.importingLocal) {
+      return;
+    }
+    try {
+      const selectOptions: picker.DocumentSelectOptions = new picker.DocumentSelectOptions();
+      selectOptions.maxSelectNumber = 1;
+      const documentPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker();
+      const selected: Array<string> = await documentPicker.select(selectOptions);
+      if (!Array.isArray(selected) || selected.length === 0) {
+        this.setNotice('Import cancelled.', false);
+        return;
+      }
+      const uri: string = selected[0];
+      const raw: string = await this.readFileSafe(uri);
+      this.showImportPreview(raw, strategy, 'file');
+    } catch (error) {
+      this.setNotice(`Import failed: ${this.formatError(error)}`, true);
+    }
+  }
+
+  private async handleImportLocal(strategy: ImportStrategy): Promise<void> {
+    const payload: string = this.importPayload.trim();
+    if (payload.length === 0) {
+      this.setNotice('Paste a folio-backup JSON first.', true);
+      return;
+    }
+    this.showImportPreview(payload, strategy, 'paste');
+  }
+
+  private showImportPreview(raw: string, strategy: ImportStrategy, source: string): void {
+    try {
+      const envelope: BackupEnvelope = parseBackupEnvelope(raw);
+      this.previewRaw = raw;
+      this.previewLinkCount = envelope.links.length;
+      this.previewCollectionCount = envelope.collections.length;
+      this.previewTagCount = envelope.tags.length;
+      this.previewExportedAt = envelope.exportedAt;
+      this.previewStrategy = strategy;
+      this.previewSource = source;
+      this.previewVisible = true;
+      this.setNotice('', false);
+    } catch (error) {
+      this.previewVisible = false;
+      this.previewRaw = '';
+      this.setNotice(`Preview failed: ${this.formatError(error)}`, true);
+    }
+  }
+
+  private async handleConfirmPreview(): Promise<void> {
+    if (this.importingLocal) {
+      return;
+    }
+    if (this.previewRaw.length === 0) {
+      this.previewVisible = false;
+      return;
+    }
+    this.importingLocal = true;
+    const raw: string = this.previewRaw;
+    const strategy: ImportStrategy = this.previewStrategy;
+    const source: string = this.previewSource;
+    try {
+      const summary: ImportSummary = await this.service.importLocal(raw, strategy);
+      this.previewVisible = false;
+      this.previewRaw = '';
+      if (source === 'paste') {
+        this.importPayload = '';
+      }
+      await this.refreshLocalCounts();
+      if (this.sessionMode === 'offline') {
+        await Promise.all([this.refreshLinks(true), this.refreshDashboard()]);
+      }
+      const parts: Array<string> = [
+        `${summary.linksImported} links imported`,
+      ];
+      if (summary.linksSkipped > 0) {
+        parts.push(`${summary.linksSkipped} skipped`);
+      }
+      if (summary.collectionsImported > 0 || summary.collectionsReused > 0) {
+        parts.push(`${summary.collectionsImported} new / ${summary.collectionsReused} reused collections`);
+      }
+      this.setNotice(parts.join(', ') + '.', false);
+    } catch (error) {
+      this.setNotice(`Import failed: ${this.formatError(error)}`, true);
+    } finally {
+      this.importingLocal = false;
+    }
+  }
+
+  private handleCancelPreview(): void {
+    this.previewVisible = false;
+    this.previewRaw = '';
+    this.setNotice('Import cancelled.', false);
+  }
+
+  private async handleClearLocal(): Promise<void> {
+    if (this.clearingLocal) {
+      return;
+    }
+    this.clearingLocal = true;
+    try {
+      await this.service.clearLocal();
+      await this.refreshLocalCounts();
+      if (this.sessionMode === 'offline') {
+        await Promise.all([this.refreshLinks(true), this.refreshDashboard()]);
+      }
+      this.setNotice('Local data cleared.', false);
+    } catch (error) {
+      this.setNotice(`Clear failed: ${this.formatError(error)}`, true);
+    } finally {
+      this.clearingLocal = false;
+    }
+  }
+
+  private handleConnectToLinkwarden(): void {
+    // From offline mode → bounce back to login. The build() gate shows the
+    // login panel whenever token is empty AND sessionMode !== 'offline'.
+    this.sessionMode = 'online';
+    this.token = '';
+    this.username = '';
+    this.password = '';
+    this.mainView = 'dashboard';
+    this.syncApiContext();
+  }
+
+  private async handleSwitchToOffline(): Promise<void> {
+    if (this.loading) {
+      return;
+    }
+    this.loading = true;
+    this.setNotice('', false);
+    try {
+      this.sessionMode = 'offline';
+      // Keep the stored token so `Resume online mode` can re-enter without
+      // re-entering credentials.
+      this.syncApiContext();
+      await this.persistSessionState();
+      await Promise.all([this.refreshLinks(true), this.refreshDashboard()]);
+      await this.refreshLocalCounts();
+      this.setNotice('Switched to offline — data stays on this device.', false);
+    } catch (error) {
+      this.setNotice(`Switch failed: ${this.formatError(error)}`, true);
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  private async handleResumeOnline(): Promise<void> {
+    if (this.loading) {
+      return;
+    }
+    if (this.token.length === 0) {
+      // No stored token — fall through to the login screen.
+      this.handleConnectToLinkwarden();
+      return;
+    }
+    this.loading = true;
+    this.setNotice('', false);
+    try {
+      this.sessionMode = 'online';
+      this.syncApiContext();
+      if (this.currentUserId === 0) {
+        try {
+          this.currentUserId = await this.service.fetchCurrentUserId();
+        } catch (idError) {
+          // Token is stale — surface the error and bounce back to login.
+          this.sessionMode = 'offline';
+          this.syncApiContext();
+          this.setNotice(
+            `Stored session is no longer valid (${this.formatError(idError)}). Tap "Connect to Linkwarden" to sign in again.`,
+            true,
+          );
+          this.token = '';
+          await this.persistSessionState();
+          return;
+        }
+      }
+      await this.persistSessionState();
+      await Promise.all([this.refreshLinks(true), this.refreshDashboard()]);
+      await this.refreshLocalCounts();
+      this.setNotice('Online — syncing from the server.', false);
+    } catch (error) {
+      this.setNotice(`Resume failed: ${this.formatError(error)}`, true);
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  private async handleSyncLocalToServer(): Promise<void> {
+    if (this.localSyncRunning || this.sessionMode !== 'online' || this.token.length === 0) {
+      return;
+    }
+    this.localSyncRunning = true;
+    this.lastMergeHasResult = false;
+    this.syncProgressText = 'Preparing…';
+    this.setNotice('', false);
+    try {
+      const runner = new MergeRunner(this.service.localDatabase(), this.service.onlineClient());
+      const summary: MergeSummary = await runner.run((progress: MergeProgress) => {
+        if (progress.phase === 'preparing') {
+          this.syncProgressText = 'Preparing…';
+        } else if (progress.phase === 'collections') {
+          this.syncProgressText = `Collections ${progress.current}/${progress.total}`;
+        } else if (progress.phase === 'links') {
+          this.syncProgressText = `Links ${progress.current}/${progress.total}`;
+        } else {
+          this.syncProgressText = 'Finishing…';
+        }
+      });
+      const parts: Array<string> = [
+        `${summary.linksCreated} links uploaded`,
+        `${summary.linksSkipped} duplicates skipped`,
+      ];
+      if (summary.linksFailed > 0) {
+        parts.push(`${summary.linksFailed} failed`);
+      }
+      if (summary.collectionsCreated > 0 || summary.collectionsReused > 0) {
+        parts.push(
+          `${summary.collectionsCreated} new / ${summary.collectionsReused} reused collections`,
+        );
+      }
+      if (summary.collectionsFailed > 0) {
+        parts.push(`${summary.collectionsFailed} collection errors`);
+      }
+      this.lastMergeSummary = parts.join(', ') + '.';
+      this.lastMergeHasResult = true;
+      await this.refreshLocalCounts();
+      await this.refreshDashboard();
+      this.setNotice('Sync complete.', false);
+    } catch (error) {
+      this.setNotice(`Sync failed: ${this.formatError(error)}`, true);
+    } finally {
+      this.localSyncRunning = false;
+      this.syncProgressText = '';
+    }
+  }
+
+  private async handleMergeArchiveKeep(): Promise<void> {
+    this.lastMergeHasResult = false;
+    this.lastMergeSummary = '';
+    this.setNotice('Local archive kept. Access it from offline mode.', false);
+  }
+
+  private async handleMergeArchiveClear(): Promise<void> {
+    if (this.clearingLocal) {
+      return;
+    }
+    this.clearingLocal = true;
+    try {
+      await this.service.clearLocal();
+      await this.refreshLocalCounts();
+      this.lastMergeHasResult = false;
+      this.lastMergeSummary = '';
+      this.setNotice('Local archive cleared.', false);
+    } catch (error) {
+      this.setNotice(`Clear failed: ${this.formatError(error)}`, true);
+    } finally {
+      this.clearingLocal = false;
     }
   }
 
@@ -3752,7 +4571,7 @@ struct Index {
       this.showPinnedOnly = false;
       this.searchQuery = '';
       const title = this.newLinkTitle.trim().length > 0 ? this.newLinkTitle.trim() : parsedInput.title;
-      const createdLink = await this.api.addLink(normalizedUrl, title, {
+      const createdLink = await this.service.addLink(normalizedUrl, title, {
         tagNames: this.resolvedDraftTags(),
         collection: matchedCollection,
       });
@@ -3778,7 +4597,7 @@ struct Index {
 
     try {
       this.syncApiContext();
-      const link = await this.api.getLink(linkId);
+      const link = await this.service.getLink(linkId);
       this.applySelectedLink(link);
     } catch (error) {
       this.setNotice(`Load detail failed: ${this.formatError(error)}`, true);
@@ -3835,7 +4654,7 @@ struct Index {
 
     try {
       this.syncApiContext();
-      const savedLink = await this.api.updateLink(nextLink);
+      const savedLink = await this.service.updateLink(nextLink);
       this.applySelectedLink(savedLink);
       this.replaceLinkInList(savedLink);
       await this.refreshDashboard();
@@ -3859,7 +4678,7 @@ struct Index {
     try {
       this.syncApiContext();
       const deletingId = this.selectedLink.id;
-      await this.api.deleteLink(deletingId);
+      await this.service.deleteLink(deletingId);
       this.removeLinkFromList(deletingId);
       this.clearSelectedLink();
       this.activeModal = 'none';
@@ -3882,7 +4701,7 @@ struct Index {
 
     try {
       this.syncApiContext();
-      await this.api.deleteLink(linkId);
+      await this.service.deleteLink(linkId);
       this.removeLinkFromList(linkId);
       this.dashboardLinks = this.dashboardLinks.filter((item: LinkItem) => item.id !== linkId);
       this.pinnedLinks = this.pinnedLinks.filter((item: LinkItem) => item.id !== linkId);
@@ -3915,7 +4734,7 @@ struct Index {
     try {
       await this.ensureCurrentUserId();
       this.syncApiContext();
-      const savedLink = await this.api.setPinned(this.selectedLink, !this.editPinned, this.currentUserId);
+      const savedLink = await this.service.setPinned(this.selectedLink, !this.editPinned, this.currentUserId);
       this.applySelectedLink(savedLink);
       this.replaceLinkInList(savedLink);
       await this.refreshDashboard();
@@ -3945,7 +4764,7 @@ struct Index {
 
     try {
       this.syncApiContext();
-      const createdCollection = await this.api.createCollection(collectionName, {
+      const createdCollection = await this.service.createCollection(collectionName, {
         description: this.newCollectionDescription,
         color: this.newCollectionColor,
         parentId: matchedParent !== null ? matchedParent.id : undefined,
@@ -3968,6 +4787,7 @@ struct Index {
   private async handleSignOut(): Promise<void> {
     this.token = '';
     this.currentUserId = 0;
+    this.sessionMode = 'online';
     this.links = [];
     this.dashboardLinks = [];
     this.pinnedLinks = [];
@@ -3984,6 +4804,8 @@ struct Index {
     this.showPinnedOnly = false;
     this.password = '';
     this.activeModal = 'none';
+    this.lastMergeHasResult = false;
+    this.lastMergeSummary = '';
     this.resetCollectionDraft();
     this.clearNewLinkDraft();
     this.clearSelectedLink();
@@ -4040,7 +4862,7 @@ struct Index {
   }
 
   private async refreshLinks(reset: boolean): Promise<void> {
-    if (this.token.length === 0) {
+    if (this.token.length === 0 && this.sessionMode !== 'offline') {
       return;
     }
 
@@ -4057,7 +4879,7 @@ struct Index {
 
     try {
       this.syncApiContext();
-      const page = await this.api.fetchLinks(
+      const page = await this.service.fetchLinks(
         reset ? 0 : this.nextCursor,
         this.searchQuery,
         this.selectedCollectionFilterId,
@@ -4088,7 +4910,7 @@ struct Index {
   }
 
   private async refreshDashboard(): Promise<void> {
-    if (this.token.length === 0) {
+    if (this.token.length === 0 && this.sessionMode !== 'offline') {
       return;
     }
 
@@ -4096,10 +4918,10 @@ struct Index {
     try {
       this.syncApiContext();
       const result = await Promise.all([
-        this.api.fetchDashboardLinks(),
-        this.api.fetchPinnedLinks(),
-        this.api.fetchCollections(),
-        this.api.fetchLinks(0, '', 0, false),
+        this.service.fetchDashboardLinks(),
+        this.service.fetchPinnedLinks(),
+        this.service.fetchCollections(),
+        this.service.fetchLinks(0, '', 0, false),
         this.fetchTagsOrEmpty(),
         this.fetchDashboardTotalsOrNull(),
       ]);
@@ -4124,7 +4946,7 @@ struct Index {
 
   private async fetchTagsOrEmpty(): Promise<Array<LinkTag>> {
     try {
-      return await this.api.fetchTags();
+      return await this.service.fetchTags();
     } catch (error) {
       console.info(`Index fetchTags failed: ${this.formatError(error)}`);
       return [];
@@ -4133,7 +4955,7 @@ struct Index {
 
   private async fetchDashboardTotalsOrNull(): Promise<DashboardTotals | null> {
     try {
-      return await this.api.fetchDashboardTotals();
+      return await this.service.fetchDashboardTotals();
     } catch (error) {
       console.info(`Index fetchDashboardTotals failed: ${this.formatError(error)}`);
       return null;
@@ -4228,13 +5050,18 @@ struct Index {
 
     this.applyNewLinkDraft(sharedUrl, sharedTitle);
 
-    if (this.token.length === 0) {
-      console.info('Index shared url captured but no token');
-      this.setNotice('Shared URL captured. Sign in to save it.', false);
+    if (this.token.length === 0 && this.sessionMode !== 'offline') {
+      console.info('Index shared url captured but no token and not offline');
+      this.setNotice('Shared URL captured. Sign in or tap "Use offline" to save it.', false);
       return;
     }
 
     this.openAddModal();
-    this.setNotice('Shared URL captured. You can set collection and tags before saving.', false);
+    this.setNotice(
+      this.sessionMode === 'offline'
+        ? 'Shared URL captured. Saving locally — set collection and tags before confirming.'
+        : 'Shared URL captured. You can set collection and tags before saving.',
+      false,
+    );
   }
 }

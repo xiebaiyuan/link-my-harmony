@@ -1,4 +1,5 @@
 export type ThemeMode = 'light' | 'dark' | 'system';
+export type SessionMode = 'online' | 'offline';
 
 export const DEFAULT_INSTANCE_URL = 'https://cloud.linkwarden.app';
 
@@ -6,12 +7,14 @@ export interface SessionState {
   instance: string;
   token: string;
   theme: ThemeMode;
+  mode: SessionMode;
 }
 
 interface SessionStatePayload {
   instance?: string;
   token?: string;
   theme?: string;
+  mode?: string;
 }
 
 export function createDefaultSessionState(): SessionState {
@@ -19,6 +22,7 @@ export function createDefaultSessionState(): SessionState {
     instance: DEFAULT_INSTANCE_URL,
     token: '',
     theme: 'system',
+    mode: 'online',
   };
 }
 
@@ -30,11 +34,16 @@ export function normalizeThemeMode(value: string): ThemeMode {
   return 'system';
 }
 
+export function normalizeSessionMode(value: string): SessionMode {
+  return value === 'offline' ? 'offline' : 'online';
+}
+
 export function serializeSessionState(state: SessionState): string {
   return JSON.stringify({
     instance: state.instance.length > 0 ? state.instance : DEFAULT_INSTANCE_URL,
     token: state.token,
     theme: state.theme,
+    mode: state.mode,
   });
 }
 
@@ -50,11 +59,13 @@ export function parseSessionState(raw: string): SessionState {
     const instanceValue = parsed.instance;
     const tokenValue = parsed.token;
     const themeValue = parsed.theme;
+    const modeValue = parsed.mode;
 
     const state: SessionState = {
       instance: typeof instanceValue === 'string' && instanceValue.length > 0 ? instanceValue : fallback.instance,
       token: typeof tokenValue === 'string' ? tokenValue : fallback.token,
       theme: normalizeThemeMode(typeof themeValue === 'string' ? themeValue : ''),
+      mode: normalizeSessionMode(typeof modeValue === 'string' ? modeValue : ''),
     };
 
     return state;

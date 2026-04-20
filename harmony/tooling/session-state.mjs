@@ -5,6 +5,7 @@ export function createDefaultSessionState() {
     instance: DEFAULT_INSTANCE_URL,
     token: '',
     theme: 'system',
+    mode: 'online',
   };
 }
 
@@ -14,6 +15,10 @@ function normalizeTheme(value) {
     : 'system';
 }
 
+function normalizeMode(value) {
+  return value === 'offline' ? 'offline' : 'online';
+}
+
 export function serializeSessionState(state) {
   return JSON.stringify({
     instance: typeof state?.instance === 'string' && state.instance.length > 0
@@ -21,6 +26,7 @@ export function serializeSessionState(state) {
       : DEFAULT_INSTANCE_URL,
     token: typeof state?.token === 'string' ? state.token : '',
     theme: normalizeTheme(state?.theme),
+    mode: normalizeMode(state?.mode),
   });
 }
 
@@ -39,6 +45,7 @@ export function parseSessionState(raw) {
         : fallback.instance,
       token: typeof parsed?.token === 'string' ? parsed.token : fallback.token,
       theme: normalizeTheme(parsed?.theme),
+      mode: normalizeMode(parsed?.mode),
     };
   } catch (error) {
     return fallback;
