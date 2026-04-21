@@ -28,6 +28,13 @@ import {
   type CollectionUsageEntry,
   type CollectionUsageState,
 } from '../common/CollectionUsage';
+import { HostCollectionMemoryStorage } from '../services/HostCollectionMemoryStorage';
+import {
+  createDefaultHostCollectionMemory,
+  pickBestCollectionForHost,
+  recordHostChoice,
+  type HostCollectionMemoryState,
+} from '../common/HostCollectionMemory';
 import { consumePendingSharedIntent } from '../common/ShareIntent';
 
 type ElementsView = 'links' | 'collections' | 'tags';
@@ -131,6 +138,8 @@ struct Index {
   @State pinSaving: boolean = false;
   @State quickMenuOpen: boolean = false;
   @State collectionUsage: CollectionUsageState = createDefaultCollectionUsage();
+  @State hostMemory: HostCollectionMemoryState = createDefaultHostCollectionMemory();
+  @State collectionManuallyPicked: boolean = false;
   @State localSyncRunning: boolean = false;
   @State lastMergeSummary: string = '';
   @State lastMergeHasResult: boolean = false;
@@ -155,6 +164,7 @@ struct Index {
   private service: BookmarkService = new BookmarkService(DEFAULT_INSTANCE_URL, '', 'online');
   private storage: SessionStorage | null = null;
   private usageStorage: CollectionUsageStorage | null = null;
+  private hostMemoryStorage: HostCollectionMemoryStorage | null = null;
   private hasRestoredSession: boolean = false;
   private sharePollTimer: number = -1;
   private noticeTimer: number = -1;
@@ -170,6 +180,7 @@ struct Index {
     this.startSharePolling();
     this.storage = new SessionStorage(getContext(this));
     this.usageStorage = new CollectionUsageStorage(getContext(this));
+    this.hostMemoryStorage = new HostCollectionMemoryStorage(getContext(this));
     this.restoreSession();
   }
 
@@ -2646,6 +2657,9 @@ struct Index {
             this.MenuActionTile('Repository', 'Open GitHub repo', () => {
               this.openLinkInBrowser('https://github.com/linkwarden/linkwarden');
             });
+            this.MenuActionTile('Harmony Client', 'Open this repo', () => {
+              this.openLinkInBrowser('https://github.com/xiebaiyuan/link-my-harmony');
+            });
           }
           .width('100%');
         }
@@ -3214,6 +3228,7 @@ struct Index {
     if (!this.newLinkTitleEdited) {
       this.newLinkTitle = this.extractUrlAndTitleFromInput(value).title;
     }
+    this.maybeAutoPickCollection();
   }
 
   private handleNewLinkTitleChange(value: string): void {
@@ -3521,6 +3536,7 @@ struct Index {
   private selectCollectionFromPicker(collection: CollectionItem | null): void {
     if (this.collectionPickerSource === 'add') {
       this.newLinkCollectionQuery = collection === null ? '' : collection.name;
+      this.collectionManuallyPicked = true;
       this.activeModal = 'add';
       return;
     }
@@ -3560,6 +3576,7 @@ struct Index {
     this.newLinkCollectionQuery = '';
     this.newLinkTagsInput = '';
     this.newTagPickerQuery = '';
+    this.collectionManuallyPicked = false;
   }
 
   private resetCollectionDraft(): void {
@@ -3576,6 +3593,8 @@ struct Index {
     this.newLinkCollectionQuery = '';
     this.newLinkTagsInput = '';
     this.newTagPickerQuery = '';
+    this.collectionManuallyPicked = false;
+    this.maybeAutoPickCollection();
   }
 
   private navigateToCollection(collectionId: number): void {
@@ -3603,6 +3622,60 @@ struct Index {
       await this.usageStorage.save(this.collectionUsage);
     } catch (error) {
       console.warn(`persist collection usage failed: ${this.formatError(error)}`);
+    }
+  }
+
+  private maybeAutoPickCollection(): void {
+    if (this.collectionManuallyPicked) {
+      return;
+    }
+    if (this.newLinkCollectionQuery.trim().length > 0) {
+      return;
+    }
+    const urlCandidate = this.extractUrlAndTitleFromInput(this.newLinkUrl).url;
+    const predictedId = this.predictCollectionForUrl(urlCandidate);
+    if (predictedId <= 0) {
+      return;
+    }
+    const collection = this.collections.find((item: CollectionItem) => item.id === predictedId);
+    if (collection === undefined) {
+      return;
+    }
+    this.newLinkCollectionQuery = collection.name;
+  }
+
+  private predictCollectionForUrl(url: string): number {
+    const now: number = Date.now();
+    if (url.length > 0) {
+      const hostPick: number = pickBestCollectionForHost(this.hostMemory, url, now);
+      if (hostPick > 0 && this.collections.some((item: CollectionItem) => item.id === hostPick)) {
+        return hostPick;
+      }
+    }
+
+    let bestId: number = 0;
+    let bestScore: number = 0;
+    this.collectionUsage.entries.forEach((entry: CollectionUsageEntry) => {
+      if (!this.collections.some((item: CollectionItem) => item.id === entry.collectionId)) {
+        return;
+      }
+      const score: number = collectionUsageScore(entry, now);
+      if (score > bestScore) {
+        bestScore = score;
+        bestId = entry.collectionId;
+      }
+    });
+    return bestId;
+  }
+
+  private async persistHostMemory(): Promise<void> {
+    if (this.hostMemoryStorage === null) {
+      this.hostMemoryStorage = new HostCollectionMemoryStorage(getContext(this));
+    }
+    try {
+      await this.hostMemoryStorage.save(this.hostMemory);
+    } catch (error) {
+      console.warn(`persist host memory failed: ${this.formatError(error)}`);
     }
   }
 
@@ -3654,6 +3727,8 @@ struct Index {
 
   private openAddModal(): void {
     this.newTagPickerQuery = '';
+    this.collectionManuallyPicked = false;
+    this.maybeAutoPickCollection();
     this.activeModal = 'add';
   }
 
@@ -3949,6 +4024,15 @@ struct Index {
         this.collectionUsage = createDefaultCollectionUsage();
       }
 
+      if (this.hostMemoryStorage === null) {
+        this.hostMemoryStorage = new HostCollectionMemoryStorage(getContext(this));
+      }
+      try {
+        this.hostMemory = await this.hostMemoryStorage.load();
+      } catch (memoryError) {
+        this.hostMemory = createDefaultHostCollectionMemory();
+      }
+
       if (this.sessionMode === 'offline') {
         await Promise.all([this.refreshLinks(true), this.refreshDashboard()]);
         await this.consumeSharedUrlAndMaybeSave();
@@ -4116,6 +4200,7 @@ struct Index {
       // their device via offline mode OR imported a backup earlier.
       await this.maybeOfferLocalSync();
 
+      this.dashboardRefreshing = true;
       await Promise.all([this.refreshLinks(true), this.refreshDashboard()]);
       await this.consumeSharedUrlAndMaybeSave();
       if (this.notice.length === 0) {
@@ -4140,6 +4225,7 @@ struct Index {
         this.setNotice(`Sign in failed: ${message}`, true);
       }
     } finally {
+      this.dashboardRefreshing = false;
       this.loading = false;
     }
   }
@@ -4575,6 +4661,15 @@ struct Index {
         tagNames: this.resolvedDraftTags(),
         collection: matchedCollection,
       });
+      if (matchedCollection !== null) {
+        this.hostMemory = recordHostChoice(
+          this.hostMemory,
+          normalizedUrl,
+          matchedCollection.id,
+          Date.now(),
+        );
+        this.persistHostMemory();
+      }
       this.clearNewLinkDraft();
       await this.refreshLinks(true);
       await this.refreshDashboard();
@@ -4772,6 +4867,7 @@ struct Index {
       await this.refreshDashboard();
       if (this.collectionModalSource === 'add') {
         this.newLinkCollectionQuery = createdCollection.name;
+        this.collectionManuallyPicked = true;
       } else {
         this.editCollectionQuery = createdCollection.name;
       }
