@@ -260,7 +260,10 @@ struct Index {
         .alignItems(HorizontalAlign.End)
         .padding({ bottom: 100, right: 20 })
         .hitTestBehavior(HitTestMode.Transparent)
-        .zIndex(100);
+        .zIndex(100)
+        .visibility(this.activeModal === 'none' ? Visibility.Visible : Visibility.Hidden)
+        .opacity(this.activeModal === 'none' ? 1 : 0)
+        .animation({ duration: 200 });
       }
 
       if (this.notice.length > 0) {
@@ -3726,6 +3729,7 @@ struct Index {
   }
 
   private openAddModal(): void {
+    this.quickMenuOpen = false;
     this.newTagPickerQuery = '';
     this.collectionManuallyPicked = false;
     this.maybeAutoPickCollection();
