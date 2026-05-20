@@ -139,6 +139,7 @@ struct Index {
   @State quickMenuOpen: boolean = false;
   @State collectionUsage: CollectionUsageState = createDefaultCollectionUsage();
   @State hostMemory: HostCollectionMemoryState = createDefaultHostCollectionMemory();
+  @State lastAddedCollectionId: number = 0;
   @State collectionManuallyPicked: boolean = false;
   @State localSyncRunning: boolean = false;
   @State lastMergeSummary: string = '';
@@ -3656,6 +3657,10 @@ struct Index {
       }
     }
 
+    if (this.lastAddedCollectionId > 0 && this.collections.some((item: CollectionItem) => item.id === this.lastAddedCollectionId)) {
+      return this.lastAddedCollectionId;
+    }
+
     let bestId: number = 0;
     let bestScore: number = 0;
     this.collectionUsage.entries.forEach((entry: CollectionUsageEntry) => {
@@ -4035,6 +4040,12 @@ struct Index {
         this.hostMemory = await this.hostMemoryStorage.load();
       } catch (memoryError) {
         this.hostMemory = createDefaultHostCollectionMemory();
+      }
+
+      try {
+        this.lastAddedCollectionId = await this.storage.loadLastAddedCollectionId();
+      } catch (_) {
+        this.lastAddedCollectionId = 0;
       }
 
       if (this.sessionMode === 'offline') {
@@ -4673,6 +4684,8 @@ struct Index {
           Date.now(),
         );
         this.persistHostMemory();
+        this.lastAddedCollectionId = matchedCollection.id;
+        this.storage?.saveLastAddedCollectionId(matchedCollection.id);
       }
       this.clearNewLinkDraft();
       await this.refreshLinks(true);

@@ -31,4 +31,16 @@ export class SessionStorage {
   async clear(): Promise<void> {
     await this.save(createDefaultSessionState());
   }
+
+  async loadLastAddedCollectionId(): Promise<number> {
+    const pref = await preferences.getPreferences(this.context, PREFERENCES_NAME);
+    const raw = await pref.get('last_added_collection_id', 0);
+    return typeof raw === 'number' ? raw : 0;
+  }
+
+  async saveLastAddedCollectionId(id: number): Promise<void> {
+    const pref = await preferences.getPreferences(this.context, PREFERENCES_NAME);
+    await pref.put('last_added_collection_id', id);
+    await pref.flush();
+  }
 }
