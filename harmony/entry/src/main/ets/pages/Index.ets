@@ -3638,7 +3638,7 @@ struct Index {
     }
     const urlCandidate = this.extractUrlAndTitleFromInput(this.newLinkUrl).url;
     const predictedId = this.predictCollectionForUrl(urlCandidate);
-    if (predictedId <= 0) {
+    if (predictedId === 0) {
       return;
     }
     const collection = this.collections.find((item: CollectionItem) => item.id === predictedId);
@@ -3657,7 +3657,7 @@ struct Index {
       }
     }
 
-    if (this.lastAddedCollectionId > 0 && this.collections.some((item: CollectionItem) => item.id === this.lastAddedCollectionId)) {
+    if (this.lastAddedCollectionId !== 0 && this.collections.some((item: CollectionItem) => item.id === this.lastAddedCollectionId)) {
       return this.lastAddedCollectionId;
     }
 
